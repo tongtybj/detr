@@ -1,8 +1,8 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 """
-DETR Transformer class.
+TRTR Transformer class.
 
-Copy-paste from torch.nn.Transformer with modifications:
+Copy from DETR, whish has following modification compared to original transformer (torch.nn.Transformer):
     * positional encodings are passed in MHattention
     * extra LN at the end of encoder is removed
     * decoder returns a stack of activations from all decoding layers
@@ -13,7 +13,6 @@ from typing import Optional, List
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
-
 
 class Transformer(nn.Module):
 
@@ -44,19 +43,42 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, query_embed, pos_embed):
-        # flatten NxCxHxW to HWxNxC
-        bs, c, h, w = src.shape
-        src = src.flatten(2).permute(2, 0, 1)
-        pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
-        query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
-        mask = mask.flatten(1)
+    def forward(self, template_src, template_mask, template_pos_embed, search_src, search_mask, search_pos_embed):
+        """
+        template_src: [batch_size x hidden_dim x H_template x W_template]
+        template_mask: [batch_size x H_template x W_template]
+        template_pos_embed: [batch_size x hidden_dim x H_template x W_template]
 
-        tgt = torch.zeros_like(query_embed)
-        memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
-        hs = self.decoder(tgt, memory, memory_key_padding_mask=mask,
-                          pos=pos_embed, query_pos=query_embed)
-        return hs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h, w)
+        search_src: [batch_size x hidden_dim x H_search x W_search]
+        search_mask: [batch_size x H_search x W_search]
+        search_pos_embed: [batch_size x hidden_dim x H_search x W_search]
+        """
+        # flatten and permute bNxCxHxW to HWxbNxC for encoder in transformer
+        bs, c, h_template, w_template = template_src.shape
+        # print("template src shape: {}".format(template_src.shape))
+        template_src = template_src.flatten(2).permute(2, 0, 1)
+        template_pos_embed = template_pos_embed.flatten(2).permute(2, 0, 1)
+        template_mask = template_mask.flatten(1)
+
+        # encoding the template embedding with positional embbeding
+        memory = self.encoder(template_src, src_key_padding_mask=template_mask, pos=template_pos_embed)
+        # print("memory for encoder: {}".format(memory.shape))
+
+        # flatten and permute bNxCxHxW to HWxbNxC for decoder in transformer
+        _, _, h_search, w_search = search_src.shape
+        # print("search src shape: {}".format(search_src.shape))
+        search_src = search_src.flatten(2).permute(2, 0, 1) # tgt
+        search_pos_embed = search_pos_embed.flatten(2).permute(2, 0, 1)
+        search_mask = search_mask.flatten(1)
+
+        hs = self.decoder(search_src, memory,
+                          memory_key_padding_mask=template_mask,
+                          tgt_key_padding_mask=search_mask,
+                          encoder_pos=template_pos_embed,
+                          decoder_pos=search_pos_embed)
+
+        # print("hs: {}".format(hs.shape))
+        return hs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h_template, w_template)
 
 
 class TransformerEncoder(nn.Module):
@@ -97,8 +119,8 @@ class TransformerDecoder(nn.Module):
                 memory_mask: Optional[Tensor] = None,
                 tgt_key_padding_mask: Optional[Tensor] = None,
                 memory_key_padding_mask: Optional[Tensor] = None,
-                pos: Optional[Tensor] = None,
-                query_pos: Optional[Tensor] = None):
+                encoder_pos: Optional[Tensor] = None,
+                decoder_pos: Optional[Tensor] = None):
         output = tgt
 
         intermediate = []
@@ -108,7 +130,8 @@ class TransformerDecoder(nn.Module):
                            memory_mask=memory_mask,
                            tgt_key_padding_mask=tgt_key_padding_mask,
                            memory_key_padding_mask=memory_key_padding_mask,
-                           pos=pos, query_pos=query_pos)
+                           encoder_pos=encoder_pos,
+                           decoder_pos=decoder_pos)
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
 
@@ -214,15 +237,15 @@ class TransformerDecoderLayer(nn.Module):
                      memory_mask: Optional[Tensor] = None,
                      tgt_key_padding_mask: Optional[Tensor] = None,
                      memory_key_padding_mask: Optional[Tensor] = None,
-                     pos: Optional[Tensor] = None,
-                     query_pos: Optional[Tensor] = None):
-        q = k = self.with_pos_embed(tgt, query_pos)
+                     encoder_pos: Optional[Tensor] = None,
+                     decoder_pos: Optional[Tensor] = None):
+        q = k = self.with_pos_embed(tgt, decoder_pos)
         tgt2 = self.self_attn(q, k, value=tgt, attn_mask=tgt_mask,
                               key_padding_mask=tgt_key_padding_mask)[0]
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
-        tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
-                                   key=self.with_pos_embed(memory, pos),
+        tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt, decoder_pos),
+                                   key=self.with_pos_embed(memory, encoder_pos),
                                    value=memory, attn_mask=memory_mask,
                                    key_padding_mask=memory_key_padding_mask)[0]
         tgt = tgt + self.dropout2(tgt2)
@@ -237,16 +260,16 @@ class TransformerDecoderLayer(nn.Module):
                     memory_mask: Optional[Tensor] = None,
                     tgt_key_padding_mask: Optional[Tensor] = None,
                     memory_key_padding_mask: Optional[Tensor] = None,
-                    pos: Optional[Tensor] = None,
-                    query_pos: Optional[Tensor] = None):
+                    encoder_pos: Optional[Tensor] = None,
+                    decoder_pos: Optional[Tensor] = None):
         tgt2 = self.norm1(tgt)
-        q = k = self.with_pos_embed(tgt2, query_pos)
+        q = k = self.with_pos_embed(tgt2, decoder_pos)
         tgt2 = self.self_attn(q, k, value=tgt2, attn_mask=tgt_mask,
                               key_padding_mask=tgt_key_padding_mask)[0]
         tgt = tgt + self.dropout1(tgt2)
         tgt2 = self.norm2(tgt)
-        tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt2, query_pos),
-                                   key=self.with_pos_embed(memory, pos),
+        tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt2, decoder_pos),
+                                   key=self.with_pos_embed(memory, encoder_pos),
                                    value=memory, attn_mask=memory_mask,
                                    key_padding_mask=memory_key_padding_mask)[0]
         tgt = tgt + self.dropout2(tgt2)
@@ -260,13 +283,15 @@ class TransformerDecoderLayer(nn.Module):
                 memory_mask: Optional[Tensor] = None,
                 tgt_key_padding_mask: Optional[Tensor] = None,
                 memory_key_padding_mask: Optional[Tensor] = None,
-                pos: Optional[Tensor] = None,
-                query_pos: Optional[Tensor] = None):
+                encoder_pos: Optional[Tensor] = None,
+                decoder_pos: Optional[Tensor] = None):
         if self.normalize_before:
             return self.forward_pre(tgt, memory, tgt_mask, memory_mask,
-                                    tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos)
+                                    tgt_key_padding_mask, memory_key_padding_mask,
+                                    encoder_pos, decoder_pos)
         return self.forward_post(tgt, memory, tgt_mask, memory_mask,
-                                 tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos)
+                                 tgt_key_padding_mask, memory_key_padding_mask,
+                                 encoder_pos, decoder_pos)
 
 
 def _get_clones(module, N):

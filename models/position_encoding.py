@@ -27,11 +27,17 @@ class PositionEmbeddingSine(nn.Module):
 
     def forward(self, tensor_list: NestedTensor):
         x = tensor_list.tensors
+
+        #print("x: {}".format(x.shape))
+
         mask = tensor_list.mask
         assert mask is not None
         not_mask = ~mask
         y_embed = not_mask.cumsum(1, dtype=torch.float32)
         x_embed = not_mask.cumsum(2, dtype=torch.float32)
+
+        #print("x_embed: {}".format(x_embed.shape))
+        #print("x_embed[:, :, -1:]: {}".format(x_embed[:, :, -1:].shape))
         if self.normalize:
             eps = 1e-6
             y_embed = y_embed / (y_embed[:, -1:, :] + eps) * self.scale
@@ -40,11 +46,28 @@ class PositionEmbeddingSine(nn.Module):
         dim_t = torch.arange(self.num_pos_feats, dtype=torch.float32, device=x.device)
         dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_pos_feats)
 
+        #print("x_embed: {}".format(x_embed.shape))
+        #print("y_embed: {}".format(y_embed.shape))
+        #print("dim_t: {}".format(dim_t.shape))
+
         pos_x = x_embed[:, :, :, None] / dim_t
         pos_y = y_embed[:, :, :, None] / dim_t
+
+        #print("pos_x: {}".format(pos_x.shape))
+        #print("pos_y: {}".format(pos_y.shape))
+
+
+        #print("stack: {}".format(torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).shape))
         pos_x = torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).flatten(3)
         pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).flatten(3)
+
+        #print("pos_x: {}".format(pos_x.shape))
+        #print("pos_y: {}".format(pos_y.shape))
+
         pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)
+
+        #print("pos: {}".format(pos.shape))
+
         return pos
 
 

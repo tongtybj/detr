@@ -266,8 +266,15 @@ def get_sha():
 
 
 def collate_fn(batch):
-    batch = list(zip(*batch))
-    batch[0] = nested_tensor_from_tensor_list(batch[0])
+    # batch: a list (batch_size) of dictionally from dataset.__item__
+    batch = list(zip(*batch)) # batch = [(3, h_temp, w_temp) x bn, (bn, 3, h_serch, w_serch) x bn, (target_dict) x bn]
+
+    assert len(batch) == 3
+
+    batch[0] = nested_tensor_from_tensor_list(batch[0]) # template
+    #print("template mask shape: {}, content: {}".format(batch[0].mask.shape, batch[0].mask))
+    batch[1] = nested_tensor_from_tensor_list(batch[1]) # search
+    #print("search mask shape: {}, content: {}".format(batch[1].mask.shape, batch[1].mask))
     return tuple(batch)
 
 

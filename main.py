@@ -34,8 +34,8 @@ def get_args_parser():
     # * Backbone
     parser.add_argument('--backbone', default='resnet50', type=str,
                         help="Name of the convolutional backbone to use")
-    parser.add_argument('--dilation', action='store_true',
-                        help="If true, we replace stride with dilation in the last convolutional block (DC5)")
+    parser.add_argument('--dilation', action='store_false',
+                        help="If true, we replace stride with dilation in the last convolutional block (DC5)") #defualt is true
     parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
                         help="Type of positional embedding to use on top of the image features")
 
@@ -55,6 +55,7 @@ def get_args_parser():
     parser.add_argument('--num_queries', default=100, type=int,
                         help="Number of query slots")
     parser.add_argument('--pre_norm', action='store_true')
+    parser.add_argument('--decoder_query', default=16, type=int) # hard-coding, should be obtained from the backbone calculation with the search_size
 
     # * Segmentation
     parser.add_argument('--masks', action='store_true',
@@ -63,26 +64,33 @@ def get_args_parser():
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
                         help="Disables auxiliary decoding losses (loss at each layer)")
-    # * Matcher
-    parser.add_argument('--set_cost_class', default=1, type=float,
-                        help="Class coefficient in the matching cost")
-    parser.add_argument('--set_cost_bbox', default=5, type=float,
-                        help="L1 box coefficient in the matching cost")
-    parser.add_argument('--set_cost_giou', default=2, type=float,
-                        help="giou box coefficient in the matching cost")
+
     # * Loss coefficients
     parser.add_argument('--mask_loss_coef', default=1, type=float)
     parser.add_argument('--dice_loss_coef', default=1, type=float)
     parser.add_argument('--bbox_loss_coef', default=5, type=float)
     parser.add_argument('--giou_loss_coef', default=2, type=float)
-    parser.add_argument('--eos_coef', default=0.1, type=float,
+    parser.add_argument('--eos_coef', default=1, type=float,
                         help="Relative classification weight of the no-object class")
 
     # dataset parameters
-    parser.add_argument('--dataset_file', default='coco')
+    parser.add_argument('--dataset_file', default='vid')
+    parser.add_argument('--vid_path', type=str)
     parser.add_argument('--coco_path', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--remove_difficult', action='store_true')
+
+    # vid dataset parameters
+    parser.add_argument('--video_frame_range', default=100, type=int)
+    parser.add_argument('--template_aug_shift', default=4, type=int)
+    parser.add_argument('--template_aug_scale', default=0.05, type=float)
+    parser.add_argument('--template_aug_color', default=1.0, type=float) # Pysot is 1.0
+    parser.add_argument('--search_aug_shift', default=64, type=int)
+    parser.add_argument('--search_aug_scale', default=0.18, type=float)
+    parser.add_argument('--search_aug_color', default=1.0, type=float)  # Pysot is 1.0
+    parser.add_argument('--exempler_size', default=127, type=int)
+    parser.add_argument('--search_size', default=255, type=int)
+    parser.add_argument('--negative_aug_rate', default=0.8, type=float)
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
@@ -211,6 +219,7 @@ def main(args):
                     'args': args,
                 }, checkpoint_path)
 
+        """
         test_stats, coco_evaluator = evaluate(
             model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
         )
@@ -219,12 +228,18 @@ def main(args):
                      **{f'test_{k}': v for k, v in test_stats.items()},
                      'epoch': epoch,
                      'n_parameters': n_parameters}
+        """
+
+        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
+                     'epoch': epoch,
+                     'n_parameters': n_parameters}
 
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
 
             # for evaluation logs
+            """
             if coco_evaluator is not None:
                 (output_dir / 'eval').mkdir(exist_ok=True)
                 if "bbox" in coco_evaluator.coco_eval:
@@ -234,6 +249,7 @@ def main(args):
                     for name in filenames:
                         torch.save(coco_evaluator.coco_eval["bbox"].eval,
                                    output_dir / "eval" / name)
+            """
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
