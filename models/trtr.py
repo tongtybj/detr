@@ -67,6 +67,12 @@ class TRTR(nn.Module):
                                 dictionnaries containing the two above keys for each decoder layer.
         """
 
+        if isinstance(template_samples, (torch.Tensor)):
+            template_samples = nested_tensor_from_tensor_list(template_samples)
+
+        if isinstance(search_samples, (torch.Tensor)):
+            search_samples = nested_tensor_from_tensor_list(search_samples)
+
         start = time.time()
         template_features, template_pos, search_features, search_pos  = self.backbone(template_samples, search_samples)
         # print("feature extraction: {}".format(time.time() - start))
@@ -252,31 +258,31 @@ class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
     @torch.no_grad()
     def forward(self, outputs, target_sizes):
-        raise ValueError("please re-implement!")
-
         """ Perform the computation
         Parameters:
             outputs: raw outputs of the model
             target_sizes: tensor of dimension [batch_size x 2] containing the size of each images of the batch
-                          For evaluation, this must be the original image size (before any data augmentation)
-                          For visualization, this should be the image size after data augment, but before padding
         """
-        out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
 
-        assert len(out_logits) == len(target_sizes)
+        out_logits, out_bboxes = outputs['pred_logit'], outputs['pred_box']
+
+        assert len(out_logits) ==  len(target_sizes)
         assert target_sizes.shape[1] == 2
 
-        prob = F.softmax(out_logits, -1)
-        scores, labels = prob[..., :-1].max(-1)
+        probs = F.softmax(out_logits, -1)
+        scores, labels = probs.max(-1)
 
-        # convert to [x0, y0, x1, y1] format
-        boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
+        # do not convert to [x0, y0, x1, y1] format
+        # boxes = box_ops.box_cxcywh_to_xyxy(out_bboxes)
+        boxes = out_bboxes.cpu()
         # and from relative [0, 1] to absolute [0, height] coordinates
         img_h, img_w = target_sizes.unbind(1)
-        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
-        boxes = boxes * scale_fct[:, None, :]
 
-        results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
+        print("post process: img_h, img_w: {}, {}".format(img_h,img_w))
+        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
+        boxes = boxes * scale_fct
+
+        results = [{'score': s, 'label': l, 'box': b} for s, l, b in zip(scores, labels, boxes)]
 
         return results
 
