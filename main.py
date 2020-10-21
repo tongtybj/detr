@@ -219,6 +219,9 @@ def main(args):
                     'args': args,
                 }, checkpoint_path)
 
+            # hack: only inference model
+            utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / 'checkpoint_only_inference.pth')
+
         """
         test_stats, coco_evaluator = evaluate(
             model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
