@@ -1,5 +1,12 @@
 # Copyright (c) SenseTime. All Rights Reserved.
 
+'''
+usage:
+
+python test.py --dataset_paths ./yt_bb/youtube_bb/Curation ./vid/ILSVRC2015/Curation/ --dataset_video_frame_ranges 100 3 --dataset_num_uses 20 20
+
+'''
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -10,6 +17,7 @@ import mimetypes
 import logging
 import sys
 import os
+from os.path import join
 
 import pathlib
 import cv2
@@ -18,20 +26,25 @@ import torch
 from torch.utils.data import Dataset
 from pathlib import Path
 import torchvision.transforms as T
-from .augmentation import Augmentation, corner2center, center2corner, Center
+
+try:
+    from .augmentation import Augmentation, corner2center, center2corner, Center
+except ImportError as e:
+    if "attempted relative import with no known parent package" == str(e):
+        from augmentation import Augmentation, corner2center, center2corner, Center # for test.py
 
 logger = logging.getLogger("global")
 
 
 class SubDataset(object):
-    def __init__(self, name, root, ann_file, frame_range, num_use, start_idx):
-        self.name = name
-        self.root = root
+    def __init__(self, path, ann_file, frame_range, num_use, start_idx):
+
+        self.path = path
         self.ann_file = ann_file
         self.frame_range = frame_range
         self.num_use = num_use
         self.start_idx = start_idx
-        logger.info("loading " + name)
+        logger.info("loading " + self.path)
 
 
         ext = str(self.ann_file).split(".")[-1]
@@ -68,9 +81,9 @@ class SubDataset(object):
         self.num = len(self.labels)
         self.num_use = self.num if self.num_use == -1 else self.num_use
         self.videos = list(meta_data.keys())
-        logger.info("{} loaded".format(self.name))
+        logger.info("{} loaded".format(self.path))
         self.path_format = '{}.{}.{}.jpg'
-
+        self.pick = self.shuffle()
 
     def _filter_zero(self, meta_data):
         meta_data_new = {}
@@ -96,13 +109,23 @@ class SubDataset(object):
 
     def log(self):
         logger.info("{} start-index {} select [{}/{}] path_format {}".format(
-            self.name, self.start_idx, self.num_use,
+            self.path, self.start_idx, self.num_use,
             self.num, self.path_format))
+
+    def shuffle(self):
+        lists = list(range(self.start_idx, self.start_idx + self.num))
+
+        pick = []
+        # assume self.num_use > self.num
+        while len(pick) < self.num_use:
+            np.random.shuffle(lists)
+            pick += lists
+        return pick[:self.num_use]
 
 
     def get_image_anno(self, video, track, frame):
         frame = "{:06d}".format(frame)
-        image_path = os.path.join(self.root, video,
+        image_path = os.path.join(self.path, video,
                                   self.path_format.format(frame, track, 'x'))
         image_anno = self.labels[video][track][frame]
         return image_path, image_anno
@@ -139,7 +162,9 @@ class SubDataset(object):
 
 
 class TrkDataset(Dataset):
-    def __init__(self, name, root, ann_file, video_frame_range,
+    def __init__(self,
+                 image_set, dataset_paths,
+                 dataset_video_frame_ranges, dataset_num_uses,
                  template_shift, template_scale, template_color,
                  search_shift, search_scale, search_color,
                  exempler_size = 127, search_size = 255,
@@ -155,19 +180,28 @@ class TrkDataset(Dataset):
         start = 0
         self.num = 0
 
-        # TODO, re-implement for multiple dataset
-        sub_dataset = SubDataset(
-            name,
-            root,
-            ann_file,
-            video_frame_range,
-            -1,
-            start)
-        start += sub_dataset.num
-        self.num += sub_dataset.num_use
+        for path, video_frame_range, num_use in zip(dataset_paths, dataset_video_frame_ranges, dataset_num_uses):
 
-        sub_dataset.log()
-        self.all_dataset.append(sub_dataset)
+            assert Path(path).exists(), f'provided VID path {path} does not exist'
+
+            ANN_PATHS = {
+                "train": join(path, 'train.pickle'),
+                "val":   join(path, 'val.pickle')
+            }
+
+            sub_dataset = SubDataset(
+                path, ANN_PATHS[image_set],
+                int(video_frame_range),
+                int(num_use),
+                start)
+            start += sub_dataset.num
+            self.num += sub_dataset.num_use
+
+            sub_dataset.log()
+            self.all_dataset.append(sub_dataset)
+
+
+        self.pick = self.shuffle()
 
         # data augmentation
         self.template_aug = Augmentation(
@@ -200,6 +234,15 @@ class TrkDataset(Dataset):
             bbox = torch.as_tensor(corner2center(bbox), dtype=torch.float32)
             bbox = bbox / torch.tensor([w, h, w, h], dtype=torch.float32)
             return image, bbox
+
+    def shuffle(self):
+        pick = []
+        for sub_dataset in self.all_dataset:
+            pick += sub_dataset.pick
+
+        assert len(pick) == self.num
+        logger.info("dataset length {}".format(self.num))
+        return pick
 
     def _find_dataset(self, index):
         for dataset in self.all_dataset:
@@ -234,6 +277,7 @@ class TrkDataset(Dataset):
         if index % 2 == 1:
             neg = self.negative_rate and self.negative_rate > np.random.random()
 
+        index = self.pick[index]
         dataset, index = self._find_dataset(index)
 
         # gray = cfg.DATASET.GRAY and cfg.DATASET.GRAY > np.random.random()
@@ -249,13 +293,11 @@ class TrkDataset(Dataset):
         template_image = cv2.imread(template[0])
         search_image = cv2.imread(search[0])
 
-        # debug
-        #if index == 0:
-        #    cv2.imshow('raw search_image', search_image)
 
         # get bounding box
         template_box = self._get_bbox(template_image, template[1])
         search_box = self._get_bbox(search_image, search[1])
+
 
         # augmentation
         template, _ = self.template_aug(template_image,
@@ -267,17 +309,15 @@ class TrkDataset(Dataset):
                                        self.search_size)
 
 
-
         """
         print("dataset idx: {}".format(index))
         print("aug search image for {}: {}".format(index, search))
-        if index == 0:
-            temp_search = search.astype(np.uint8).copy()
-            bbox_int = np.round(bbox).astype(np.uint16)
-            cv2.rectangle(temp_search, (bbox_int[0], bbox_int[1]), (bbox_int[2], bbox_int[3]), (0,255,0))
+        temp_search = search.astype(np.uint8).copy()
+        bbox_int = np.round(bbox).astype(np.uint16)
+        cv2.rectangle(temp_search, (bbox_int[0], bbox_int[1]), (bbox_int[2], bbox_int[3]), (0,255,0))
 
-            cv2.imshow('auged search_image', temp_search)
-            k = cv2.waitKey(0)
+        cv2.imshow('auged search_image', temp_search)
+        k = cv2.waitKey(0)
         """
 
         # normalize
@@ -297,21 +337,10 @@ class TrkDataset(Dataset):
         return template, search, target_dict
 
 def build(image_set, args):
-    root = Path(args.vid_path)
-    assert root.exists(), f'provided VID path {root} does not exist'
 
-    """
-    ANN_PATHS = {
-        "train": root / f'train.json',
-        "val": root / f'val.json'
-    }
-    """
-    ANN_PATHS = {
-        "train": root / f'train.pickle',
-        "val": root / f'val.pickle'
-    }
-
-    dataset = TrkDataset("vid", root, ANN_PATHS[image_set], args.video_frame_range,
+    assert len(args.dataset_paths) == len(args.dataset_video_frame_ranges) == len(args.dataset_num_uses)
+    dataset = TrkDataset(image_set, args.dataset_paths,
+                         args.dataset_video_frame_ranges, args.dataset_num_uses,
                          args.template_aug_shift, args.template_aug_scale, args.template_aug_color,
                          args.search_aug_shift, args.search_aug_scale, args.search_aug_color,
                          args.exempler_size, args.search_size,

@@ -14,4 +14,4 @@ ln -sfb $PWD/ILSVRC2015_./ # important
 ````shell
 python curate_vid.py
 ````
-**note**: you can add option like: `python curate_vid.py 511 24` 
+**note**: you can add option like: `python curate_vid.py 24` 

@@ -4,16 +4,16 @@ import datetime
 import json
 import random
 import time
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
 
-# hack
-import sys
-sys.path.append('../../')
-from datasets import build_dataset
+from dataset import build as build_dataset
+
+sys.path.append('..')
 import util.misc as utils
 from util.box_ops import  box_cxcywh_to_xyxy, box_xyxy_to_cxcywh
 
@@ -27,11 +27,10 @@ def get_args_parser():
     parser.add_argument('--epoch', default=1, type=int)
 
     # dataset parameters
-    parser.add_argument('--dataset_file', default='vid')
-    parser.add_argument('--vid_path', type=str)
+    parser.add_argument('--dataset_paths', default=[], nargs='+') # the path to datasets
 
-    # vid dataset parameters
-    parser.add_argument('--video_frame_range', default=100, type=int)
+    parser.add_argument('--dataset_video_frame_ranges', default=[100], nargs='+')
+    parser.add_argument('--dataset_num_uses', default=[-1], nargs='+')
     parser.add_argument('--template_aug_shift', default=4, type=int)
     parser.add_argument('--template_aug_scale', default=0.05, type=float)
     parser.add_argument('--template_aug_color', default=1.0, type=float)
@@ -59,9 +58,6 @@ def get_args_parser():
 
 
 def main(args):
-
-    if not args.vid_path:
-        raise NameError("Please assign the path to get VID raw data using --vid_path")
 
     device = torch.device(args.device)
 

@@ -10,12 +10,15 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
 
-import datasets
 import util.misc as utils
-from datasets import build_dataset, get_coco_api_from_dataset
+from datasets.dataset import build as build_dataset
 from engine import evaluate, train_one_epoch
 from models import build_model
 
+'''
+usage:
+$ python main.py --dataset_paths ./datasets/yt_bb/youtube_bb/Curation ./datasets/vid/ILSVRC2015/Curation/ --dataset_video_frame_ranges 100 3 --daset_num_uses 100000 -1 # check pysot
+'''
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
@@ -74,14 +77,10 @@ def get_args_parser():
                         help="Relative classification weight of the no-object class")
 
     # dataset parameters
-    parser.add_argument('--dataset_file', default='vid')
-    parser.add_argument('--vid_path', type=str)
-    parser.add_argument('--coco_path', type=str)
-    parser.add_argument('--coco_panoptic_path', type=str)
-    parser.add_argument('--remove_difficult', action='store_true')
+    parser.add_argument('--dataset_paths', default=[], nargs='+') # the path to datasets
 
-    # vid dataset parameters
-    parser.add_argument('--video_frame_range', default=100, type=int)
+    parser.add_argument('--dataset_video_frame_ranges', default=[100], nargs='+')
+    parser.add_argument('--dataset_num_uses', default=[-1], nargs='+')
     parser.add_argument('--template_aug_shift', default=4, type=int)
     parser.add_argument('--template_aug_scale', default=0.05, type=float)
     parser.add_argument('--template_aug_color', default=1.0, type=float) # Pysot is 1.0
@@ -165,12 +164,6 @@ def main(args):
     data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
                                  drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
 
-    if args.dataset_file == "coco_panoptic":
-        # We also evaluate AP during panoptic training, on original coco DS
-        coco_val = datasets.coco.build("val", args)
-        base_ds = get_coco_api_from_dataset(coco_val)
-    else:
-        base_ds = get_coco_api_from_dataset(dataset_val)
 
     if args.frozen_weights is not None:
         checkpoint = torch.load(args.frozen_weights, map_location='cpu')
@@ -188,13 +181,6 @@ def main(args):
             optimizer.load_state_dict(checkpoint['optimizer'])
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
             args.start_epoch = checkpoint['epoch'] + 1
-
-    if args.eval:
-        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,
-                                              data_loader_val, base_ds, device, args.output_dir)
-        if args.output_dir:
-            utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
-        return
 
     print("Start training")
     start_time = time.time()
@@ -222,16 +208,6 @@ def main(args):
             # hack: only inference model
             utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / 'checkpoint_only_inference.pth')
 
-        """
-        test_stats, coco_evaluator = evaluate(
-            model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
-        )
-
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                     **{f'test_{k}': v for k, v in test_stats.items()},
-                     'epoch': epoch,
-                     'n_parameters': n_parameters}
-        """
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      'epoch': epoch,
@@ -241,18 +217,6 @@ def main(args):
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
 
-            # for evaluation logs
-            """
-            if coco_evaluator is not None:
-                (output_dir / 'eval').mkdir(exist_ok=True)
-                if "bbox" in coco_evaluator.coco_eval:
-                    filenames = ['latest.pth']
-                    if epoch % 50 == 0:
-                        filenames.append(f'{epoch:03}.pth')
-                    for name in filenames:
-                        torch.save(coco_evaluator.coco_eval["bbox"].eval,
-                                   output_dir / "eval" / name)
-            """
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
