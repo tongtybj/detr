@@ -9,19 +9,18 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as T
-from datasets.utils import crop_image, siamfc_like_scale # TODO: move to utils
+import datasets.utils
+from datasets.utils import crop_image, siamfc_like_scale, get_exemplar_size # TODO: move to utils
 from util.box_ops import box_cxcywh_to_xyxy
 import cv2
 
 class Tracker(object):
-    def __init__(self, model, postprocess, exemplar_size, search_size, context_amount):
+    def __init__(self, model, postprocess, search_size):
         self.model = model
         self.model.eval()
         self.postprocess = postprocess
 
-        self.exemplar_size = exemplar_size
         self.search_size = search_size
-        self.context_amount = context_amount
 
         self.size_lpf = 0.5
 
@@ -30,12 +29,13 @@ class Tracker(object):
             T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
 
-    def _bbox_clip(self, cx, cy, width, height, boundary):
-        cx = max(0, min(cx, boundary[1]))
-        cy = max(0, min(cy, boundary[0]))
-        width = max(10, min(width, boundary[1]))
-        height = max(10, min(height, boundary[0]))
-        return cx, cy, width, height
+    def _bbox_clip(self, bbox, boundary):
+        x1 = max(0, bbox[0])
+        y1 = max(0, bbox[1])
+        x2 = min(boundary[1], bbox[2])
+        y2 = min(boundary[0], bbox[3])
+
+        return [x1, y1, x2, y2]
 
     def init(self, img, bbox_center):
         """
@@ -53,15 +53,16 @@ class Tracker(object):
         channel_avg = np.mean(img, axis=(0, 1))
 
         # get crop
-        scale_z = siamfc_like_scale(bbox_xyxy, self.exemplar_size)[1]
+        scale_z = siamfc_like_scale(bbox_xyxy)[1]
         template_image, _ = crop_image(img, bbox_xyxy, padding = channel_avg)
 
         self.rect_template_image = template_image.copy()
         init_bbox = np.array(self.size) * scale_z
-        x1 = np.round(self.exemplar_size/2 - init_bbox[0]/2).astype(np.uint8)
-        y1 = np.round(self.exemplar_size/2 - init_bbox[1]/2).astype(np.uint8)
-        x2 = np.round(self.exemplar_size/2 + init_bbox[0]/2).astype(np.uint8)
-        y2 = np.round(self.exemplar_size/2 + init_bbox[1]/2).astype(np.uint8)
+        exemplar_size = get_exemplar_size()
+        x1 = np.round(exemplar_size/2 - init_bbox[0]/2).astype(np.uint8)
+        y1 = np.round(exemplar_size/2 - init_bbox[1]/2).astype(np.uint8)
+        x2 = np.round(exemplar_size/2 + init_bbox[0]/2).astype(np.uint8)
+        y2 = np.round(exemplar_size/2 + init_bbox[1]/2).astype(np.uint8)
         cv2.rectangle(self.rect_template_image, (x1, y1), (x2, y2), (0,255,0), 3)
 
         # normalize and conver to torch.tensor
@@ -95,13 +96,14 @@ class Tracker(object):
 
         print("outputs: {}".format(outputs))
 
-        scale_z = siamfc_like_scale(bbox_xyxy, self.exemplar_size)[1]
+        scale_z = siamfc_like_scale(bbox_xyxy)[1]
 
         bbox = outputs[0]["box"] / scale_z
         pos_delta = (outputs[0]["box"][:2] - self.search_size / 2) / scale_z
 
         print("scaled back bbox: {}, delta pos: {}, scaked back search size: {}".format(bbox, pos_delta, self.search_size / scale_z))
 
+        # todo smooth:
         cx = self.center_pos[0] + pos_delta[0]
         cy = self.center_pos[1] + pos_delta[1]
 
@@ -110,16 +112,13 @@ class Tracker(object):
         height = self.size[1] * (1 - self.size_lpf) + bbox[3].item() * self.size_lpf
 
         # clip boundary
-        cx, cy, width, height = self._bbox_clip(cx, cy, width, height, img.shape[:2])
-
-
-
-        # udpate state
-        self.center_pos = [cx, cy]
-        self.size = [width, height]
-
         bbox = [cx - width / 2, cy - height / 2,
                 cx + width / 2, cy + height / 2]
+        bbox = self._bbox_clip(bbox, img.shape[:2])
+
+        # udpate state
+        self.center_pos = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]
+        self.size = [bbox[2] - bbox[0], bbox[3] - bbox[1]]
 
         # debug for search image:
         debug_bbox = box_cxcywh_to_xyxy(torch.round(outputs[0]["box"]).int())
@@ -135,4 +134,4 @@ class Tracker(object):
                }
 
 def build_tracker(model, postprocess, args):
-    return Tracker(model, postprocess, args.exemplar_size, args.search_size, args.context_amount)
+    return Tracker(model, postprocess, args.search_size)

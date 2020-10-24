@@ -9,6 +9,9 @@ INSTANCE_SIZE = 511
 EXEMPLAR_SIZE = 127
 CONTEXT_AMOUNT= 0.5
 
+def get_exemplar_size():
+    return EXEMPLAR_SIZE
+
 def print_progress(iteration, total, prefix='', suffix='', decimals=1, barLength=100):
     """
     Call in a loop to create terminal progress bar
@@ -42,7 +45,7 @@ def crop_hwc(image, bbox, out_sz, padding=(0, 0, 0)):
     return crop
 
 
-def siamfc_like_scale(bbox, crop_size):
+def siamfc_like_scale(bbox):
 
     bb_size = [bbox[2]-bbox[0], bbox[3]-bbox[1]]
 
@@ -50,19 +53,18 @@ def siamfc_like_scale(bbox, crop_size):
     hc_z = bb_size[0] + CONTEXT_AMOUNT * sum(bb_size)
 
     s_z = np.sqrt(wc_z * hc_z)
-    scale_z = crop_size / s_z
+    scale_z = EXEMPLAR_SIZE / s_z
 
     return s_z, scale_z
 
 def crop_image(image, bbox, padding=(0, 0, 0), instance_size = INSTANCE_SIZE):
-
 
     def pos_s_2_bbox(pos, s):
         return [pos[0]-s/2, pos[1]-s/2, pos[0]+s/2, pos[1]+s/2]
 
 
     bb_center = [(bbox[2]+bbox[0])/2., (bbox[3]+bbox[1])/2.]
-    s_z =  siamfc_like_scale(bbox, EXEMPLAR_SIZE)[0]
+    s_z =  siamfc_like_scale(bbox)[0]
     s_x = instance_size / EXEMPLAR_SIZE  * s_z
     #print("instance_size: {}; EXEMPLAR_SIZE: {}; s_z: {}; s_x: {}".format(instance_size, EXEMPLAR_SIZE, s_z, s_x))
 
