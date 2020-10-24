@@ -54,7 +54,7 @@ def siamfc_like_scale(bbox, crop_size):
 
     return s_z, scale_z
 
-def crop_image(image, bbox, padding=(0, 0, 0)):
+def crop_image(image, bbox, padding=(0, 0, 0), instance_size = INSTANCE_SIZE):
 
 
     def pos_s_2_bbox(pos, s):
@@ -63,11 +63,11 @@ def crop_image(image, bbox, padding=(0, 0, 0)):
 
     bb_center = [(bbox[2]+bbox[0])/2., (bbox[3]+bbox[1])/2.]
     s_z =  siamfc_like_scale(bbox, EXEMPLAR_SIZE)[0]
-    s_x = INSTANCE_SIZE / EXEMPLAR_SIZE  * s_z
-    #print("INSTANCE_SIZE: {}; EXEMPLAR_SIZE: {}; s_z: {}; s_x: {}".format(INSTANCE_SIZE, EXEMPLAR_SIZE, s_z, s_x))
+    s_x = instance_size / EXEMPLAR_SIZE  * s_z
+    #print("instance_size: {}; EXEMPLAR_SIZE: {}; s_z: {}; s_x: {}".format(instance_size, EXEMPLAR_SIZE, s_z, s_x))
 
     z = crop_hwc(image, pos_s_2_bbox(bb_center, s_z), EXEMPLAR_SIZE, padding)
-    x = crop_hwc(image, pos_s_2_bbox(bb_center, s_x), INSTANCE_SIZE, padding) # crop a size of s_x, then resize to INSTANCE_SIZE
+    x = crop_hwc(image, pos_s_2_bbox(bb_center, s_x), instance_size, padding) # crop a size of s_x, then resize to instance_size
 
     #z = image[bbox[1]:bbox[3], bbox[0]:bbox[2]]
 

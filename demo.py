@@ -29,6 +29,7 @@ def get_args_parser():
                         help="Name of the convolutional backbone to use")
     parser.add_argument('--dilation', action='store_false',
                         help="If true, we replace stride with dilation in the last convolutional block (DC5)") #defualt is true
+    parser.add_argument('--return_interm_layers', action='store_true')
     parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
                         help="Type of positional embedding to use on top of the image features")
 

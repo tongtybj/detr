@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as T
-from datasets.vid.curate_vid import crop_image, siamfc_like_scale # TODO: move to utils
+from datasets.utils import crop_image, siamfc_like_scale # TODO: move to utils
 from util.box_ops import box_cxcywh_to_xyxy
 import cv2
 
@@ -53,8 +53,8 @@ class Tracker(object):
         channel_avg = np.mean(img, axis=(0, 1))
 
         # get crop
-        scale_z = siamfc_like_scale(bbox_xyxy, self.context_amount, self.exemplar_size)[1]
-        template_image, _ = crop_image(img, bbox_xyxy, exemplar_size=self.exemplar_size, instance_size=self.search_size, padding = channel_avg, context_amount=self.context_amount)
+        scale_z = siamfc_like_scale(bbox_xyxy, self.exemplar_size)[1]
+        template_image, _ = crop_image(img, bbox_xyxy, padding = channel_avg)
 
         self.rect_template_image = template_image.copy()
         init_bbox = np.array(self.size) * scale_z
@@ -83,7 +83,7 @@ class Tracker(object):
                      self.center_pos[0] + self.size[0] / 2,
                      self.center_pos[1] + self.size[1] / 2]
         channel_avg = np.mean(img, axis=(0, 1))
-        _, search_image = crop_image(img, bbox_xyxy, exemplar_size=self.exemplar_size, instance_size=self.search_size, padding = channel_avg, context_amount=self.context_amount)
+        _, search_image = crop_image(img, bbox_xyxy, padding = channel_avg, instance_size = self.search_size)
 
         # normalize and conver to torch.tensor
         search = self.image_normalize(np.round(search_image).astype(np.uint8)).unsqueeze(0).cuda()
@@ -95,7 +95,7 @@ class Tracker(object):
 
         print("outputs: {}".format(outputs))
 
-        scale_z = siamfc_like_scale(bbox_xyxy, self.context_amount, self.exemplar_size)[1]
+        scale_z = siamfc_like_scale(bbox_xyxy, self.exemplar_size)[1]
 
         bbox = outputs[0]["box"] / scale_z
         pos_delta = (outputs[0]["box"][:2] - self.search_size / 2) / scale_z
