@@ -278,7 +278,7 @@ class PostProcess(nn.Module):
         # and from relative [0, 1] to absolute [0, height] coordinates
         img_h, img_w = target_sizes.unbind(1)
 
-        print("post process: img_h, img_w: {}, {}".format(img_h,img_w))
+        #print("post process: img_h, img_w: {}, {}".format(img_h,img_w))
         scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
         boxes = boxes * scale_fct
 

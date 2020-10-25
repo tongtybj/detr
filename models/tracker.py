@@ -37,19 +37,16 @@ class Tracker(object):
 
         return [x1, y1, x2, y2]
 
-    def init(self, img, bbox_center):
+    def init(self, img, bbox):
         """
         args:
             img(np.ndarray): BGR image
             bbox: (x, y, w, h) bbox (opencv format for rect)
         """
 
-        bbox_xyxy  = [bbox_center[0], bbox_center[1],
-                      bbox_center[0] + bbox_center[2],
-                      bbox_center[1] + bbox_center[3]]
-        self.center_pos = [bbox_center[0] + bbox_center[2]/2,
-                           bbox_center[1] + bbox_center[3]/2]
-        self.size = [bbox_center[2], bbox_center[3]]
+        bbox_xyxy  = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
+        self.center_pos = [bbox[0] + bbox[2]/2, bbox[1] + bbox[3]/2]
+        self.size = bbox[2:]
         channel_avg = np.mean(img, axis=(0, 1))
 
         # get crop
@@ -94,18 +91,18 @@ class Tracker(object):
 
         outputs = self.postprocess(outputs, torch.as_tensor(search.shape[-2:]).unsqueeze(0))
 
-        print("outputs: {}".format(outputs))
+        # print("outputs: {}".format(outputs))
 
         scale_z = siamfc_like_scale(bbox_xyxy)[1]
 
         bbox = outputs[0]["box"] / scale_z
         pos_delta = (outputs[0]["box"][:2] - self.search_size / 2) / scale_z
 
-        print("scaled back bbox: {}, delta pos: {}, scaked back search size: {}".format(bbox, pos_delta, self.search_size / scale_z))
+        # print("scaled back bbox: {}, delta pos: {}, scaked back search size: {}".format(bbox, pos_delta, self.search_size / scale_z))
 
         # todo smooth:
-        cx = self.center_pos[0] + pos_delta[0]
-        cy = self.center_pos[1] + pos_delta[1]
+        cx = self.center_pos[0] + pos_delta[0].item()
+        cy = self.center_pos[1] + pos_delta[1].item()
 
         # smooth bbox
         width = self.size[0] * (1 - self.size_lpf) + bbox[2].item() * self.size_lpf
@@ -125,6 +122,7 @@ class Tracker(object):
         rec_search_image = cv2.rectangle(search_image,
                                          (debug_bbox[0], debug_bbox[1]),
                                          (debug_bbox[2], debug_bbox[3]),(0,255,0),3)
+
         return {
             'bbox': bbox,
             'label': outputs[0]["label"],
