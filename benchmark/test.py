@@ -85,7 +85,7 @@ def get_args_parser():
     parser.add_argument('--vis', action='store_true', help='whether visualzie result')
     parser.add_argument('--debug_vis', action='store_true', help='wheterh visualize the debug result')
     parser.add_argument('--model_name', default='trtr', type=str)
-    
+
     return parser
 
 def main(args):
@@ -114,6 +114,7 @@ def main(args):
                                             load_img=False)
 
     model_name = args.model_name
+
     total_lost = 0
     if args.dataset in ['VOT2016', 'VOT2018', 'VOT2019']:
         # restart tracking
