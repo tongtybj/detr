@@ -53,6 +53,7 @@ def siamfc_like_scale(bbox):
     hc_z = bb_size[0] + CONTEXT_AMOUNT * sum(bb_size)
 
     s_z = np.sqrt(wc_z * hc_z)
+
     scale_z = EXEMPLAR_SIZE / s_z
 
     return s_z, scale_z
