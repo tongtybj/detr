@@ -62,6 +62,10 @@ class GOT10kDataset(Dataset):
         pbar = tqdm(meta_data.keys(), desc='loading '+name, ncols=100)
         self.videos = {}
         for video in pbar:
+
+            if not os.path.isdir(os.path.join(dataset_root, video)):
+                continue
+
             pbar.set_postfix_str(video)
             self.videos[video] = GOT10kVideo(video,
                                           dataset_root,

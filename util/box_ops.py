@@ -3,6 +3,7 @@
 Utilities for bounding box manipulation and GIoU.
 """
 import torch
+import numpy as np
 from torchvision.ops.boxes import box_area
 
 
@@ -86,3 +87,21 @@ def masks_to_boxes(masks):
     y_min = y_mask.masked_fill(~(masks.bool()), 1e8).flatten(1).min(-1)[0]
 
     return torch.stack([x_min, y_min, x_max, y_max], 1)
+
+def get_axis_aligned_bbox(region):
+    """ convert bbox with rotation to to (cx, cy, w, h) that represent by axis aligned box
+    """
+    cx = np.mean(region[0::2])
+    cy = np.mean(region[1::2])
+    x1 = min(region[0::2])
+    x2 = max(region[0::2])
+    y1 = min(region[1::2])
+    y2 = max(region[1::2])
+    A1 = np.linalg.norm(region[0:2] - region[2:4]) * \
+         np.linalg.norm(region[2:4] - region[4:6])
+    A2 = (x2 - x1) * (y2 - y1)
+    s = np.sqrt(A1 / A2)
+    w = s * (x2 - x1)
+    h = s * (y2 - y1)
+    return cx, cy, w, h
+

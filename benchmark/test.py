@@ -15,6 +15,7 @@ import numpy as np
 from glob import glob
 
 sys.path.append('..')
+from util.box_ops import get_axis_aligned_bbox
 from models import build_model
 from models.tracker import build_tracker
 from toolkit.datasets import DatasetFactory
@@ -130,21 +131,23 @@ def main(args):
             for idx, (img, gt_bbox) in enumerate(video):
                 if len(gt_bbox) == 4:
                     gt_bbox = [gt_bbox[0], gt_bbox[1],
-                       gt_bbox[0], gt_bbox[1]+gt_bbox[3]-1,
-                       gt_bbox[0]+gt_bbox[2]-1, gt_bbox[1]+gt_bbox[3]-1,
-                       gt_bbox[0]+gt_bbox[2]-1, gt_bbox[1]]
+                               gt_bbox[0], gt_bbox[1]+gt_bbox[3],
+                               gt_bbox[0]+gt_bbox[2], gt_bbox[1]+gt_bbox[3],
+                               gt_bbox[0]+gt_bbox[2], gt_bbox[1]]
                 tic = cv2.getTickCount()
                 if idx == frame_counter:
                     cx, cy, w, h = get_axis_aligned_bbox(np.array(gt_bbox))
-                    gt_bbox_ = [cx-(w-1)/2, cy-(h-1)/2, w, h]
+                    gt_bbox_ = [cx - w/2, cy - h/2, w, h]
                     tracker.init(img, gt_bbox_)
                     pred_bbox = gt_bbox_
                     pred_bboxes.append(1)
                 elif idx > frame_counter:
                     outputs = tracker.track(img)
                     pred_bbox = outputs['bbox']
-                    if cfg.MASK.MASK:
-                        pred_bbox = outputs['polygon']
+                    pred_bbox = [pred_bbox[0], pred_bbox[1],
+                                 pred_bbox[2] - pred_bbox[0],
+                                 pred_bbox[3] - pred_bbox[1]]
+
                     overlap = vot_overlap(pred_bbox, gt_bbox, (img.shape[1], img.shape[0]))
                     if overlap > 0:
                         # not lost
@@ -161,19 +164,18 @@ def main(args):
                     if args.vis:
                         cv2.destroyAllWindows()
                 if args.vis and idx > frame_counter:
-                    cv2.polylines(img, [np.array(gt_bbox, np.int).reshape((-1, 1, 2))],
-                            True, (0, 255, 0), 3)
-                    if cfg.MASK.MASK:
-                        cv2.polylines(img, [np.array(pred_bbox, np.int).reshape((-1, 1, 2))],
-                                True, (0, 255, 255), 3)
-                    else:
-                        bbox = list(map(int, pred_bbox))
-                        cv2.rectangle(img, (bbox[0], bbox[1]),
-                                      (bbox[0]+bbox[2], bbox[1]+bbox[3]), (0, 255, 255), 3)
+                    cv2.polylines(img, [np.array(gt_bbox, np.int).reshape((-1, 2))], True, (0, 255, 0), 3)
+
+                    bbox = list(map(int, pred_bbox))
+                    cv2.rectangle(img, (bbox[0], bbox[1]),
+                                  (bbox[0]+bbox[2], bbox[1]+bbox[3]), (0, 255, 255), 3)
                     cv2.putText(img, str(idx), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
                     cv2.putText(img, str(lost_number), (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                     cv2.imshow(video.name, img)
                     cv2.waitKey(1)
+                elif not args.vis:
+                    sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
+
             toc /= cv2.getTickFrequency()
             # save results
             video_path = os.path.join('results', args.dataset, model_name,
