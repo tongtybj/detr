@@ -43,7 +43,7 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, template_src, template_mask, template_pos_embed, search_src, search_mask, search_pos_embed):
+    def forward(self, template_src, template_mask, template_pos_embed, search_src, search_mask, search_pos_embed, init_bbox_embed):
         """
         template_src: [batch_size x hidden_dim x H_template x W_template]
         template_mask: [batch_size x H_template x W_template]
@@ -52,10 +52,12 @@ class Transformer(nn.Module):
         search_src: [batch_size x hidden_dim x H_search x W_search]
         search_mask: [batch_size x H_search x W_search]
         search_pos_embed: [batch_size x hidden_dim x H_search x W_search]
+
+        init_bbox_embed: [batch_size x hidden_dim]
         """
         # flatten and permute bNxCxHxW to HWxbNxC for encoder in transformer
         bs, c, h_template, w_template = template_src.shape
-        # print("template src shape: {}".format(template_src.shape))
+        #print("template src shape: {}".format(template_src.shape))
         template_src = template_src.flatten(2).permute(2, 0, 1)
         template_pos_embed = template_pos_embed.flatten(2).permute(2, 0, 1)
         template_mask = template_mask.flatten(1)
@@ -65,19 +67,30 @@ class Transformer(nn.Module):
         # print("memory for encoder: {}".format(memory.shape))
 
         # flatten and permute bNxCxHxW to HWxbNxC for decoder in transformer
-        _, _, h_search, w_search = search_src.shape
         # print("search src shape: {}".format(search_src.shape))
         search_src = search_src.flatten(2).permute(2, 0, 1) # tgt
         search_pos_embed = search_pos_embed.flatten(2).permute(2, 0, 1)
         search_mask = search_mask.flatten(1)
 
-        hs = self.decoder(search_src, memory,
-                          memory_key_padding_mask=template_mask,
-                          tgt_key_padding_mask=search_mask,
-                          encoder_pos=template_pos_embed,
-                          decoder_pos=search_pos_embed)
+        # add init_bbox as the first embedding
+        #print("search_src: {}, init_bbox_embed: {}".format(search_src.shape, init_bbox_embed.shape))
+        search_src_with_init_bbox = torch.cat([init_bbox_embed[None,:], search_src], dim=0)
+        #print("search_src_with_init_bbox: {}".format(search_src_with_init_bbox.shape))
+        #print("search_mask: {}".format(search_mask.shape))
+        search_mask_with_init_bbox = torch.cat([torch.zeros([bs, 1], dtype=torch.bool, device=search_mask.device), search_mask], dim=1)
+        #print("search_mask_with_init_bbox: {}".format(search_mask_with_init_bbox.shape))
 
-        # print("hs: {}".format(hs.shape))
+        #print("search_pos_embed: {}".format(search_pos_embed.shape))
+        search_pos_embed_with_init_bbox = torch.cat([torch.zeros([1, bs, c], dtype=torch.float32, device=search_pos_embed.device), search_pos_embed], dim=0)
+        #print("search_pos_embed_with_init_bbox: {}".format(search_pos_embed_with_init_bbox.shape))
+
+        hs = self.decoder(search_src_with_init_bbox, memory,
+                          memory_key_padding_mask=template_mask,
+                          tgt_key_padding_mask=search_mask_with_init_bbox,
+                          encoder_pos=template_pos_embed,
+                          decoder_pos=search_pos_embed_with_init_bbox)
+
+        #print("hs: {}".format(hs.shape))
         return hs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h_template, w_template)
 
 

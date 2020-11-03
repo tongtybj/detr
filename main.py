@@ -54,10 +54,7 @@ def get_args_parser():
                         help="Dropout applied in the transformer")
     parser.add_argument('--nheads', default=8, type=int,
                         help="Number of attention heads inside the transformer's attentions")
-    parser.add_argument('--num_queries', default=100, type=int,
-                        help="Number of query slots")
     parser.add_argument('--pre_norm', action='store_true')
-    parser.add_argument('--decoder_query', default=16, type=int) # hard-coding, should be obtained from the backbone calculation with the search_size
 
 
     # Loss
@@ -76,7 +73,7 @@ def get_args_parser():
 
     parser.add_argument('--dataset_video_frame_ranges', default=[100], nargs='+')
     parser.add_argument('--dataset_num_uses', default=[-1], nargs='+')
-    parser.add_argument('--template_aug_shift', default=4, type=int)
+    parser.add_argument('--template_aug_shift', default=32, type=int)
     parser.add_argument('--template_aug_scale', default=0.05, type=float)
     parser.add_argument('--template_aug_color', default=1.0, type=float) # Pysot is 1.0
     parser.add_argument('--search_aug_shift', default=64, type=int)

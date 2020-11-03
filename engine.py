@@ -25,9 +25,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     for template_samples, search_samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         template_samples = template_samples.to(device)
         search_samples = search_samples.to(device)
+        init_bboxes = torch.stack([t['init_bbox'].to(device)  for t in targets])
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(template_samples, search_samples)
+        outputs = model(template_samples, search_samples, init_bboxes)
+
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
@@ -77,9 +79,10 @@ def evaluate(model, criterion, postprocessors, data_loader, device, output_dir):
     for template_samples, search_samples, targets in metric_logger.log_every(data_loader, 10, header):
         template_samples = template_samples.to(device)
         search_samples = search_samples.to(device)
+        init_bboxes = torch.stack([t['init_bbox'].to(device)  for t in targets])
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(template_samples, search_samples)
+        outputs = model(template_samples, search_samples, init_bboxes)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
 

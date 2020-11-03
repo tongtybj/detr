@@ -20,12 +20,11 @@ import time
 
 class TRTR(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbone, transformer, decoder_query, bbox_head_hidden_dimension = None, aux_loss=False):
+    def __init__(self, backbone, transformer, aux_loss=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
             transformer: torch module of the transformer architecture. See transformer.py
-            decoder_query: the query size (one side) to feed into the decoder
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
@@ -33,12 +32,9 @@ class TRTR(nn.Module):
 
         hidden_dim = transformer.d_model
 
-        self.decoder_query = decoder_query
-        self.class_embed = nn.Linear(hidden_dim * decoder_query * decoder_query, 2) # fully connected, class: has object or not
+        self.input_bbox_embed = nn.Linear(4, hidden_dim) # extend the dimension from 4 to hidden_dim
 
-        if not bbox_head_hidden_dimension:
-            bbox_head_hidden_dimension = hidden_dim
-        self.bbox_embed = MLP(hidden_dim * decoder_query * decoder_query, bbox_head_hidden_dimension, 4, 3) # TODO: what is a good head?
+        self.pred_bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         #for param in self.bbox_embed.parameters():
         #    print(type(param), param.size(), param.requires_grad)
 
@@ -47,7 +43,7 @@ class TRTR(nn.Module):
         self.aux_loss = aux_loss
 
 
-    def forward(self, template_samples: NestedTensor, search_samples: NestedTensor):
+    def forward(self, template_samples: NestedTensor, search_samples: NestedTensor, init_bboxes: torch.Tensor):
         """ template_samples is a NestedTensor for template image:
                - samples.tensor: batched images, of shape [batch_size x 3 x H_template x W_template]
                - samples.mask: a binary mask of shape [batch_size x H_template x W_template], containing 1 on padded pixels
@@ -55,10 +51,7 @@ class TRTR(nn.Module):
                - samples.tensor: batched images, of shape [batch_size x 3 x H_search x W_search]
                - samples.mask: a binary mask of shape [batch_size x H_search x W_search], containing 1 on padded pixels
 
-            bakui TODO:
             It returns a dict with the following elements:
-               - "pred_logits": the classification logits (including no-object) for all queries.
-                                Shape= [batch_size x 2]
                - "pred_boxes": The normalized boxes coordinates for all queries, represented as
                                (center_x, center_y, height, width). These values are normalized in [0, 1],
                                relative to the size of each individual image (disregarding possible padding).
@@ -82,31 +75,28 @@ class TRTR(nn.Module):
         assert search_mask is not None
         assert template_mask is not None
 
-        assert search_src.shape[-1] == self.decoder_query and search_src.shape[-2] == self.decoder_query
 
         hs = self.transformer(self.input_proj(template_src), template_mask, template_pos[-1],
-                              self.input_proj(search_src), search_mask, search_pos[-1])[0]
+                              self.input_proj(search_src), search_mask, search_pos[-1],
+                              self.input_bbox_embed(init_bboxes))[0]
 
-        hs = hs.flatten(2) # for following fully connected layer
-        # print("hs flattened : {}".format(hs.shape))
-        outputs_class = self.class_embed(hs)
-        start = time.time()
-        outputs_coord = self.bbox_embed(hs).sigmoid()  # 0 ~ 1
-        #print("bbox regrasion head: {}".format(time.time() - start))
-        # print("outputs_class: {}".format(outputs_class.shape))
+        #print("pred_bboxes before hs: {}".format(hs.shape))
+        pred_bboxes = hs[:,:,0,:] # the first element
+        #print("pred_bboxes after hs: {}".format(pred_bboxes.shape))
+
+        outputs_coord = self.pred_bbox_embed(pred_bboxes).sigmoid()  # 0 ~ 1
         # print("outputs_coord: {}".format(outputs_coord.shape))
-        out = {'pred_logit': outputs_class[-1], 'pred_box': outputs_coord[-1]}
+        out = {'pred_box': outputs_coord[-1]}
         if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
+            out['aux_outputs'] = self._set_aux_loss(outputs_coord)
         return out
 
     @torch.jit.unused
-    def _set_aux_loss(self, outputs_class, outputs_coord):
+    def _set_aux_loss(self, outputs_coord):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
-        return [{'pred_logit': a, 'pred_box': b}
-                for a, b in zip(outputs_class[:-1], outputs_coord[:-1])]
+        return [{'pred_box': coord} for coord in outputs_coord[:-1]]
 
 
 class SetCriterion(nn.Module):
@@ -151,33 +141,23 @@ class SetCriterion(nn.Module):
         assert 'pred_box' in outputs
 
         all_src_boxes = outputs['pred_box'] # [bN, 4]
-        all_target_boxes = torch.stack([t['bbox'] for t in targets]) # [bn, 4]
+        all_target_boxes = torch.stack([t['gt_bbox'] for t in targets]) # [bn, 4]
         # print("all_target_boxes: {}".format(all_target_boxes))
         assert all_src_boxes.shape == all_target_boxes.shape
 
-        # only calculate the loss for bbox has the object
-        idx = [id for id, t in enumerate(targets) if t["label"] == 1] # only extract the index with object
-        # print("targets: {}".format(targets))
-        src_boxes = all_src_boxes[idx]
-        target_boxes = all_target_boxes[idx]
-        # assert src_boxes.device == target_boxes.device
-
-        # debug
         # print("loss boxes all target boxes: {}".format(all_target_boxes))
         # print("loss boxes all src boxes: {}".format(all_src_boxes))
 
-        # print("loss boxes idx: {}".format(idx))
-        # print("loss boxes selected target boxes: {}".format(target_boxes))
-        # print("loss boxes selected src boxes: {}".format(src_boxes))
-
-        loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
+        #print("all_src_boxes: {}, type: {}".format(all_src_boxes.shape, all_src_boxes.device))
+        #print("all_target_boxes: {}, type: {}".format(all_target_boxes.shape, all_target_boxes.device))
+        loss_bbox = F.l1_loss(all_src_boxes, all_target_boxes, reduction='none')
 
         losses = {}
         losses['loss_bbox'] = loss_bbox.sum() / num_boxes
 
         loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
-            box_ops.box_cxcywh_to_xyxy(src_boxes),
-            box_ops.box_cxcywh_to_xyxy(target_boxes)))
+            box_ops.box_cxcywh_to_xyxy(all_src_boxes),
+            box_ops.box_cxcywh_to_xyxy(all_target_boxes)))
         losses['loss_giou'] = loss_giou.sum() / num_boxes
         return losses
 
@@ -228,8 +208,7 @@ class SetCriterion(nn.Module):
         """
 
         # Compute the average number of target boxes accross all nodes, for normalization purposes
-        num_boxes = sum(t["label"].item() for t in targets) # 0: non-object, 1:  object
-        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
+        num_boxes = torch.as_tensor([len(targets)], dtype=torch.float, device=next(iter(outputs.values())).device)
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)
         num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
@@ -311,7 +290,6 @@ def build(args):
     model = TRTR(
         backbone,
         transformer,
-        decoder_query = args.decoder_query,
         aux_loss=args.aux_loss,
     )
 
@@ -325,7 +303,8 @@ def build(args):
             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
         weight_dict.update(aux_weight_dict)
 
-    losses = ['labels', 'boxes']
+    #losses = ['labels', 'boxes']
+    losses = ['boxes']
     criterion = SetCriterion(weight_dict=weight_dict,
                              eos_coef=args.eos_coef, losses=losses)
     criterion.to(device)

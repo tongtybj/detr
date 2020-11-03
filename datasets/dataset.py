@@ -272,17 +272,13 @@ class TrkDataset(Dataset):
 
     def __getitem__(self, index):
 
-        # only do for odd index
-        neg = 0
-        if index % 2 == 1:
-            neg = self.negative_rate and self.negative_rate > np.random.random()
-
         index = self.pick[index]
         dataset, index = self._find_dataset(index)
 
         # gray = cfg.DATASET.GRAY and cfg.DATASET.GRAY > np.random.random()
 
         # get one dataset
+        neg = False
         if neg:
             template = dataset.get_random_target(index)
             search = np.random.choice(self.all_dataset).get_random_target()
@@ -293,28 +289,27 @@ class TrkDataset(Dataset):
         template_image = cv2.imread(template[0])
         search_image = cv2.imread(search[0])
 
-
         # get bounding box
         template_box = self._get_bbox(template_image, template[1])
         search_box = self._get_bbox(search_image, search[1])
 
 
         # augmentation
-        template, _ = self.template_aug(template_image,
-                                        template_box,
-                                        self.exempler_size)
+        template, init_bbox = self.template_aug(template_image,
+                                                template_box,
+                                                self.search_size)
 
-        search, bbox = self.search_aug(search_image,
-                                       search_box,
-                                       self.search_size)
+        search, gt_bbox = self.search_aug(search_image,
+                                          search_box,
+                                          self.search_size)
 
 
         """
         print("dataset idx: {}".format(index))
         print("aug search image for {}: {}".format(index, search))
         temp_search = search.astype(np.uint8).copy()
-        bbox_int = np.round(bbox).astype(np.uint16)
-        cv2.rectangle(temp_search, (bbox_int[0], bbox_int[1]), (bbox_int[2], bbox_int[3]), (0,255,0))
+        gt_bbox_int = np.round(gt_bbox).astype(np.uint16)
+        cv2.rectangle(temp_search, (gt_bbox_int[0], gt_bbox_int[1]), (gt_bbox_int[2], gt_bbox_int[3]), (0,255,0))
 
         cv2.imshow('auged search_image', temp_search)
         k = cv2.waitKey(0)
@@ -323,14 +318,14 @@ class TrkDataset(Dataset):
         # normalize
         # we have to change to type from float to uint8 for torchvision.transforms.ToTensor
         # https://pytorch.org/docs/stable/torchvision/transforms.html#torchvision.transforms.ToTensor
-        template = self.normalize(np.round(template).astype(np.uint8))
-        search, bbox = self.normalize(np.round(search).astype(np.uint8), bbox)
+        template, init_bbox = self.normalize(np.round(template).astype(np.uint8), init_bbox)
+        search, gt_bbox = self.normalize(np.round(search).astype(np.uint8), gt_bbox)
 
         # print("aug search image for {}: {}".format(index, search))
 
         target_dict =  {
-            'label': torch.as_tensor([1 if neg == 0 else 0]), # 0: non-object, 1: object
-            'bbox': bbox,
+            'init_bbox': init_bbox,
+            'gt_bbox': gt_bbox,
             'index': torch.as_tensor([index])
         }
 

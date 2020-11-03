@@ -31,7 +31,7 @@ def get_args_parser():
 
     parser.add_argument('--dataset_video_frame_ranges', default=[100], nargs='+')
     parser.add_argument('--dataset_num_uses', default=[-1], nargs='+')
-    parser.add_argument('--template_aug_shift', default=4, type=int)
+    parser.add_argument('--template_aug_shift', default=32, type=int)
     parser.add_argument('--template_aug_scale', default=0.05, type=float)
     parser.add_argument('--template_aug_color', default=1.0, type=float)
     parser.add_argument('--search_aug_shift', default=64, type=int)
@@ -111,12 +111,17 @@ def main(args):
                 template_image = revert_template_image.to('cpu').detach().numpy().copy()
                 template_image = (np.round(template_image.transpose(1,2,0))).astype(np.uint8).copy()
 
-                print("bbox: {}".format(targets[batch_i]["bbox"]))
+                print("init bbox: {}, gt bbox: {}".format(targets[batch_i]["init_bbox"], targets[batch_i]["gt_bbox"]))
                 h, w = search_image.shape[:2]
-                xyxy = box_cxcywh_to_xyxy(targets[batch_i]["bbox"]).to("cpu")
-                bbox_int = (torch.round(xyxy * torch.tensor([w, h, w, h]))).int()
-                print(type(search_image))
-                cv2.rectangle(search_image, (bbox_int[0], bbox_int[1]), (bbox_int[2], bbox_int[3]), (0,255,0))
+                gt_xyxy = box_cxcywh_to_xyxy(targets[batch_i]["gt_bbox"]).to("cpu")
+                gt_bbox_int = (torch.round(gt_xyxy * torch.tensor([w, h, w, h]))).int()
+                # print(type(search_image))
+                cv2.rectangle(search_image, (gt_bbox_int[0], gt_bbox_int[1]), (gt_bbox_int[2], gt_bbox_int[3]), (0,255,0))
+
+                h, w = template_image.shape[:2]
+                init_xyxy = box_cxcywh_to_xyxy(targets[batch_i]["init_bbox"]).to("cpu")
+                init_bbox_int = (torch.round(init_xyxy * torch.tensor([w, h, w, h]))).int()
+                cv2.rectangle(template_image, (init_bbox_int[0], init_bbox_int[1]), (init_bbox_int[2], init_bbox_int[3]), (0,255,0))
 
                 cv2.imshow('search_image', search_image)
                 cv2.imshow('template_image', template_image)
