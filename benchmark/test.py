@@ -212,7 +212,6 @@ def main(args):
                 if idx == 0:
                     tracker.init(img, gt_bbox)
                     pred_bbox = gt_bbox
-                    scores.append(None)
                     if 'VOT2018-LT' == args.dataset:
                         pred_bboxes.append([1])
                     else:
@@ -224,7 +223,6 @@ def main(args):
                                  pred_bbox_[2] - pred_bbox_[0],
                                  pred_bbox_[3] - pred_bbox_[1]]
                     pred_bboxes.append(pred_bbox)
-                    scores.append(outputs['score'])
                     template_image = outputs["template_image"]
                     search_image = outputs["search_image"]
                 toc += cv2.getTickCount() - tic

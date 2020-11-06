@@ -243,13 +243,8 @@ class PostProcess(nn.Module):
             target_sizes: tensor of dimension [batch_size x 2] containing the size of each images of the batch
         """
 
-        out_logits, out_bboxes = outputs['pred_logit'], outputs['pred_box']
-
-        assert len(out_logits) ==  len(target_sizes)
+        out_bboxes = outputs['pred_box']
         assert target_sizes.shape[1] == 2
-
-        probs = F.softmax(out_logits, -1)
-        scores, labels = probs.max(-1)
 
         # do not convert to [x0, y0, x1, y1] format
         # boxes = box_ops.box_cxcywh_to_xyxy(out_bboxes)
@@ -261,9 +256,7 @@ class PostProcess(nn.Module):
         scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
         boxes = boxes * scale_fct
 
-        results = [{'score': s, 'label': l, 'box': b} for s, l, b in zip(scores, labels, boxes)]
-
-        return results
+        return boxes
 
 
 class MLP(nn.Module):

@@ -148,7 +148,7 @@ def main(args):
         output = tracker.track(frame)
 
         bbox = np.round(output["bbox"]).astype(np.uint16)
-        print("the tracking class: {}, score: {}, box: {}".format(output["label"],  output["score"], bbox))
+        print("the tracking bbox: {}".format(bbox))
         cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]),
                       (0, 255, 0), 3)
 

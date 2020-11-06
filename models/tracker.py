@@ -51,18 +51,25 @@ class Tracker(object):
 
         # get crop
         scale_z = siamfc_like_scale(bbox_xyxy)[1]
-        template_image, _ = crop_image(img, bbox_xyxy, padding = channel_avg)
+        _, template_image = crop_image(img, bbox_xyxy, padding = channel_avg, instance_size = self.search_size)
+
+        # print("the template image size: {}".format(template_image.shape))
 
         self.rect_template_image = template_image.copy()
         init_bbox = np.array(self.size) * scale_z
-        exemplar_size = get_exemplar_size()
-        x1 = np.round(exemplar_size/2 - init_bbox[0]/2).astype(np.uint8)
-        y1 = np.round(exemplar_size/2 - init_bbox[1]/2).astype(np.uint8)
-        x2 = np.round(exemplar_size/2 + init_bbox[0]/2).astype(np.uint8)
-        y2 = np.round(exemplar_size/2 + init_bbox[1]/2).astype(np.uint8)
+
+        x1 = np.round(self.search_size/2 - init_bbox[0]/2).astype(np.uint8)
+        y1 = np.round(self.search_size/2 - init_bbox[1]/2).astype(np.uint8)
+        x2 = np.round(self.search_size/2 + init_bbox[0]/2).astype(np.uint8)
+        y2 = np.round(self.search_size/2 + init_bbox[1]/2).astype(np.uint8)
         cv2.rectangle(self.rect_template_image, (x1, y1), (x2, y2), (0,255,0), 3)
 
-        # normalize and conver to torch.tensor
+        # normalize bbox
+        self.template_bbox = torch.tensor([self.search_size/2, self.search_size/2, init_bbox[0], init_bbox[1]], dtype=torch.float32) / self.search_size
+        self.template_bbox = self.template_bbox.unsqueeze(0).cuda()
+        # print("template bbox: {}".format(self.template_bbox))
+
+        # normalize image and conver to torch.tensor
         self.template = self.image_normalize(np.round(template_image).astype(np.uint8)).unsqueeze(0).cuda()
 
         # debug
@@ -87,7 +94,7 @@ class Tracker(object):
         search = self.image_normalize(np.round(search_image).astype(np.uint8)).unsqueeze(0).cuda()
 
         with torch.no_grad():
-            outputs = self.model(self.template, search)
+            outputs = self.model(self.template, search, self.template_bbox)
 
         outputs = self.postprocess(outputs, torch.as_tensor(search.shape[-2:]).unsqueeze(0))
 
@@ -95,8 +102,8 @@ class Tracker(object):
 
         scale_z = siamfc_like_scale(bbox_xyxy)[1]
 
-        bbox = outputs[0]["box"] / scale_z
-        pos_delta = (outputs[0]["box"][:2] - self.search_size / 2) / scale_z
+        bbox = outputs[0] / scale_z
+        pos_delta = (outputs[0][:2] - self.search_size / 2) / scale_z
 
         # print("scaled back bbox: {}, delta pos: {}, scaked back search size: {}".format(bbox, pos_delta, self.search_size / scale_z))
 
@@ -118,15 +125,13 @@ class Tracker(object):
         self.size = [bbox[2] - bbox[0], bbox[3] - bbox[1]]
 
         # debug for search image:
-        debug_bbox = box_cxcywh_to_xyxy(torch.round(outputs[0]["box"]).int())
+        debug_bbox = box_cxcywh_to_xyxy(torch.round(outputs[0]).int())
         rec_search_image = cv2.rectangle(search_image,
                                          (debug_bbox[0], debug_bbox[1]),
                                          (debug_bbox[2], debug_bbox[3]),(0,255,0),3)
 
         return {
             'bbox': bbox,
-            'label': outputs[0]["label"],
-            'score': outputs[0]["score"],
             'search_image': rec_search_image, # debug
             'template_image': self.rect_template_image # debug
                }
