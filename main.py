@@ -4,6 +4,7 @@ import datetime
 import json
 import random
 import time
+import os
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,9 @@ import util.misc as utils
 from datasets.dataset import build as build_dataset
 from engine import evaluate, train_one_epoch
 from models import build_model
+from models.tracker import build_tracker
+from benchmark import eval as benchmark_eval
+from benchmark import test as benchmark_test
 
 '''
 usage:
@@ -21,7 +25,7 @@ $ python main.py --dataset_paths ./datasets/yt_bb/youtube_bb/Curation ./datasets
 '''
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
+    parser = argparse.ArgumentParser('tracking evaluation', add_help=False)
     parser.add_argument('--lr', default=1e-4, type=float)
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
     parser.add_argument('--batch_size', default=2, type=int)
@@ -101,6 +105,12 @@ def get_args_parser():
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+
+    parser.add_argument('--model_save_step', default=50, type=int,
+                        help='step to save model')
+    parser.add_argument('--benchmark_test_step', default=2, type=int,
+                        help='step to test benchmark')
+
     return parser
 
 
@@ -158,12 +168,6 @@ def main(args):
                                  drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
 
 
-    """
-    if args.frozen_weights is not None:
-        checkpoint = torch.load(args.frozen_weights, map_location='cpu')
-        model_without_ddp.detr.load_state_dict(checkpoint['model'])
-    """
-
     output_dir = Path(args.output_dir)
     if args.resume:
         if args.resume.startswith('https'):
@@ -176,6 +180,17 @@ def main(args):
             optimizer.load_state_dict(checkpoint['optimizer'])
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
             args.start_epoch = checkpoint['epoch'] + 1
+
+    benchmark_test_parser = argparse.ArgumentParser('benchmark dataset inference', parents=[benchmark_test.get_args_parser(), get_args_parser()],conflict_handler='resolve')
+    benchmark_test_args = benchmark_test_parser.parse_args()
+    benchmark_test_args.result_path = Path(os.path.join(args.output_dir, 'benchmark'))
+    benchmark_test_args.dataset_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'benchmark')
+
+    benchmark_eval_parser = argparse.ArgumentParser('benchmark dataset inference', parents=[benchmark_eval.get_args_parser(), get_args_parser()],conflict_handler='resolve')
+    benchmark_eval_args = benchmark_eval_parser.parse_args()
+    benchmark_eval_args.tracker_path = benchmark_test_args.result_path
+    best_eao = 0
+    best_eao_epoch = 0
 
     print("Start training")
     start_time = time.time()
@@ -191,8 +206,8 @@ def main(args):
 
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
-            # extra checkpoint before LR drop and every 100 epochs
-            if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 100 == 0:
+            # extra checkpoint before LR drop and every args.model_save_step epochs
+            if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % args.model_save_step == 0:
                 checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
             for checkpoint_path in checkpoint_paths:
                 utils.save_on_master({
@@ -218,6 +233,58 @@ def main(args):
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
 
+
+        # evualute with benchmark
+        if utils.is_main_process():
+            if (epoch + 1) % args.benchmark_test_step == 0:
+                model.eval()
+                tracker = build_tracker(model, postprocessors["bbox"], benchmark_test_args)
+                benchmark_start_time = time.time()
+                benchmark_test.main(benchmark_test_args, tracker)
+                benchmark_time = time.time() - benchmark_start_time
+
+                eval_results = benchmark_eval.main(benchmark_eval_args)
+                eval_result = list(eval_results.values())[0]
+
+                if benchmark_test_args.dataset in ['VOT2016', 'VOT2017', 'VOT2018', 'VOT2019']:
+                    if args.output_dir:
+                        with (output_dir / str("benchmark_" +  benchmark_test_args.dataset + ".txt")).open("a") as f:
+                            f.write("epoch: " + str(epoch) + ", " + json.dumps(eval_result) + ", best EAO: " + str(best_eao) +  "\n")
+
+                    if best_eao < eval_result['EAO']:
+
+                        if args.output_dir:
+                            # remove the old one:
+                            best_eao_int = int(best_eao*1000)
+                            checkpoint_path = output_dir / f'checkpoint{best_eao_epoch:04}_best_eao_{best_eao_int:03}.pth'
+                            if os.path.exists(checkpoint_path):
+                                os.remove(checkpoint_path)
+                            checkpoint_path = output_dir / f'checkpoint{best_eao_epoch:04}_best_eao_{best_eao_int:03}_only_inference.pth'
+                            if os.path.exists(checkpoint_path):
+                                os.remove(checkpoint_path)
+
+
+                        best_eao = eval_result['EAO']
+                        best_eao_epoch = epoch
+
+                        if args.output_dir:
+                            best_eao_int = int(best_eao*1000)
+                            checkpoint_path = output_dir / f'checkpoint{epoch:04}_best_eao_{best_eao_int:03}.pth'
+                            utils.save_on_master({
+                                'model': model_without_ddp.state_dict(),
+                                'optimizer': optimizer.state_dict(),
+                                'lr_scheduler': lr_scheduler.state_dict(),
+                                'epoch': epoch,
+                                'args': args,
+                            }, checkpoint_path)
+
+                            # hack: only inference model
+                            utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / f'checkpoint{epoch:04}_best_eao_{best_eao_int:03}_only_inference.pth')
+
+
+                print("benchmark time: {}".format(benchmark_time))
+        if args.distributed:
+            torch.distributed.barrier()
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))

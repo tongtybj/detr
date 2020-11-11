@@ -17,22 +17,22 @@ from toolkit.datasets import OTBDataset, UAVDataset, LaSOTDataset, \
 from toolkit.evaluation import OPEBenchmark, AccuracyRobustnessBenchmark, \
         EAOBenchmark, F1Benchmark
 
-parser = argparse.ArgumentParser(description='tracking evaluation')
-parser.add_argument('--tracker_path', '-p', type=str,
-                    help='tracker result path')
-parser.add_argument('--dataset', '-d', type=str,
-                    help='dataset name')
-parser.add_argument('--num', '-n', default=1, type=int,
-                    help='number of thread to eval')
-parser.add_argument('--tracker_prefix', '-t', default='',
-                    type=str, help='tracker name')
-parser.add_argument('--show_video_level', '-s', dest='show_video_level',
-                    action='store_true')
-parser.set_defaults(show_video_level=False)
-args = parser.parse_args()
+def get_args_parser():
+    parser = argparse.ArgumentParser('benchmark dataset inference', add_help=False)
+    parser.add_argument('--tracker_path', '-p', type=str, default='results',
+                        help='tracker result path')
+    parser.add_argument('--dataset', '-d', type=str, default='VOT2018',
+                        help='dataset name')
+    parser.add_argument('--num', '-n', default=1, type=int,
+                        help='number of thread to eval')
+    parser.add_argument('--tracker_prefix', '-t', default='',
+                        type=str, help='tracker name')
+    parser.add_argument('--show_video_level', '-s', dest='show_video_level',
+                        action='store_true')
+    parser.set_defaults(show_video_level=False)
+    return parser
 
-
-def main():
+def main(args):
     tracker_dir = os.path.join(args.tracker_path, args.dataset)
     trackers = glob(os.path.join(args.tracker_path,
                                  args.dataset,
@@ -131,8 +131,11 @@ def main():
             for ret in tqdm(pool.imap_unordered(benchmark.eval,
                 trackers), desc='eval eao', total=len(trackers), ncols=100):
                 eao_result.update(ret)
-        ar_benchmark.show_result(ar_result, eao_result,
-                show_video_level=args.show_video_level)
+        ar_eao_results = ar_benchmark.show_result(ar_result, eao_result,
+                                                  show_video_level=args.show_video_level)
+
+        # print("eao_result: {}".format(ar_eao_results))
+        return ar_eao_results
     elif 'VOT2018-LT' == args.dataset:
         dataset = VOTLTDataset(args.dataset, root)
         dataset.set_tracker(tracker_dir, trackers)
@@ -147,4 +150,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser('Benchmark dataset inference', parents=[get_args_parser()])
+    args = parser.parse_args()
+    main(args)
+

@@ -21,11 +21,8 @@ from models.tracker import build_tracker
 from toolkit.datasets import DatasetFactory
 from toolkit.utils.region import vot_overlap, vot_float2str
 
-torch.set_num_threads(1)
-
-
 def get_args_parser():
-    parser = argparse.ArgumentParser('Set transformer tracking', add_help=False)
+    parser = argparse.ArgumentParser('benchmark dataset inference', add_help=False)
 
     # Model parameters
     parser.add_argument('--device', default='cuda',
@@ -81,35 +78,25 @@ def get_args_parser():
     parser.add_argument('--search_size', default=255, type=int)
     parser.add_argument('--context_amount', default=0.5, type=float)
 
-    parser.add_argument('--dataset', type=str, help='datasets')
+    parser.add_argument('--dataset_path', default="", type=str, help='path of datasets')
+    parser.add_argument('--dataset', type=str, help='the benchmark', default="VOT2018")
     parser.add_argument('--video', default='', type=str, help='eval one special video')
     parser.add_argument('--vis', action='store_true', help='whether visualzie result')
     parser.add_argument('--debug_vis', action='store_true', help='wheterh visualize the debug result')
     parser.add_argument('--model_name', default='trtr', type=str)
 
+    parser.add_argument('--result_path', default='results', type=str)
+
     return parser
 
-def main(args):
 
-    # create model
-    if not torch.cuda.is_available():
-        raise ValueError("CUDA is not available in Pytorch")
-
-    device = torch.device('cuda')
-
-    # create model
-    model, criterion, postprocessors = build_model(args)
-
-    # load model
-    checkpoint = torch.load(args.checkpoint, map_location='cpu')
-    assert 'model' in checkpoint
-    model.load_state_dict(checkpoint['model'])
-    model.to(device)
-    tracker = build_tracker(model, postprocessors["bbox"], args)
+def main(args, tracker):
 
     # create dataset
-    cur_dir = os.path.dirname(os.path.realpath(__file__))
-    dataset_root = os.path.join(cur_dir, 'dataset', args.dataset)
+    if not args.dataset_path:
+        args.dataset_path = os.path.dirname(os.path.realpath(__file__))
+    dataset_root = os.path.join(args.dataset_path, 'dataset', args.dataset)
+
     dataset = DatasetFactory.create_dataset(name=args.dataset,
                                             dataset_root=dataset_root,
                                             load_img=False)
@@ -178,7 +165,7 @@ def main(args):
 
             toc /= cv2.getTickFrequency()
             # save results
-            video_path = os.path.join('results', args.dataset, model_name,
+            video_path = os.path.join(args.result_path, args.dataset, model_name,
                     'baseline', video.name)
             if not os.path.isdir(video_path):
                 os.makedirs(video_path)
@@ -256,7 +243,7 @@ def main(args):
             toc /= cv2.getTickFrequency()
             # save results
             if 'VOT2018-LT' == args.dataset:
-                video_path = os.path.join('results', args.dataset, model_name,
+                video_path = os.path.join(args.result_path, args.dataset, model_name,
                         'longterm', video.name)
                 if not os.path.isdir(video_path):
                     os.makedirs(video_path)
@@ -276,7 +263,7 @@ def main(args):
                     for x in track_times:
                         f.write("{:.6f}\n".format(x))
             elif 'GOT-10k' == args.dataset:
-                video_path = os.path.join('results', args.dataset, model_name, video.name)
+                video_path = os.path.join(args.result_path, args.dataset, model_name, video.name)
                 if not os.path.isdir(video_path):
                     os.makedirs(video_path)
                 result_path = os.path.join(video_path, '{}_001.txt'.format(video.name))
@@ -289,7 +276,7 @@ def main(args):
                     for x in track_times:
                         f.write("{:.6f}\n".format(x))
             else:
-                model_path = os.path.join('results', args.dataset, model_name)
+                model_path = os.path.join(args.result_path, args.dataset, model_name)
                 if not os.path.isdir(model_path):
                     os.makedirs(model_path)
                 result_path = os.path.join(model_path, '{}.txt'.format(video.name))
@@ -299,8 +286,22 @@ def main(args):
             print('({:3d}) Video: {:12s} Time: {:5.1f}s Speed: {:3.1f}fps'.format(
                 v_idx+1, video.name, toc, idx / toc))
 
-
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
+    parser = argparse.ArgumentParser('Benchmark dataset inference', parents=[get_args_parser()])
     args = parser.parse_args()
-    main(args)
+
+    # create tracker
+    if not torch.cuda.is_available():
+        raise ValueError("CUDA is not available in Pytorch")
+
+    device = torch.device('cuda')
+
+    model, criterion, postprocessors = build_model(args)
+
+    checkpoint = torch.load(args.checkpoint, map_location='cpu')
+    assert 'model' in checkpoint
+    model.load_state_dict(checkpoint['model'])
+    model.to(device)
+    tracker = build_tracker(model, postprocessors["bbox"], args)
+
+    main(args, tracker)

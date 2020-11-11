@@ -66,6 +66,9 @@ class AccuracyRobustnessBenchmark:
             tracker_names = [x[0] for x in tracker_eao]
         else:
             tracker_names = list(result.keys())
+
+        ar_eao_results = {}
+
         for tracker_name in tracker_names:
         # for tracker_name, ret in result.items():
             ret = result[tracker_name]
@@ -75,10 +78,14 @@ class AccuracyRobustnessBenchmark:
             failures = list(ret['failures'].values())
             lost_number = np.mean(np.sum(failures, axis=0))
             robustness = np.mean(np.sum(np.array(failures), axis=0) / length) * 100
+
+            ar_eao_results[tracker_name] = {'accuracy': accuracy, 'robustness': robustness, 'lost_number': lost_number, 'failures': ret['failures']}
             if eao_result is None:
                 print(formatter.format(tracker_name, accuracy, robustness, lost_number))
             else:
                 print(formatter.format(tracker_name, accuracy, robustness, lost_number, eao_result[tracker_name]['all']))
+                ar_eao_results[tracker_name]['EAO'] = eao_result[tracker_name]['all']
+
         print(bar)
 
         if show_video_level and len(result) < 10:
@@ -114,6 +121,8 @@ class AccuracyRobustnessBenchmark:
                         row += lost_num_str+'|'
                 print(row)
             print('-'*len(header1))
+
+        return ar_eao_results
 
     def _calculate_accuracy_robustness(self, tracker_name):
         overlaps = {}
