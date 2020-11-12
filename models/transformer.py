@@ -43,7 +43,7 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, template_src, template_mask, template_pos_embed, search_src, search_mask, search_pos_embed):
+    def forward(self, template_src, template_mask, template_pos_embed, search_src, search_mask, search_pos_embed, memory = None):
         """
         template_src: [batch_size x hidden_dim x H_template x W_template]
         template_mask: [batch_size x H_template x W_template]
@@ -54,19 +54,15 @@ class Transformer(nn.Module):
         search_pos_embed: [batch_size x hidden_dim x H_search x W_search]
         """
         # flatten and permute bNxCxHxW to HWxbNxC for encoder in transformer
-        bs, c, h_template, w_template = template_src.shape
-        # print("template src shape: {}".format(template_src.shape))
         template_src = template_src.flatten(2).permute(2, 0, 1)
         template_pos_embed = template_pos_embed.flatten(2).permute(2, 0, 1)
         template_mask = template_mask.flatten(1)
 
         # encoding the template embedding with positional embbeding
-        memory = self.encoder(template_src, src_key_padding_mask=template_mask, pos=template_pos_embed)
-        # print("memory for encoder: {}".format(memory.shape))
+        if memory is None:
+            memory = self.encoder(template_src, src_key_padding_mask=template_mask, pos=template_pos_embed)
 
         # flatten and permute bNxCxHxW to HWxbNxC for decoder in transformer
-        _, _, h_search, w_search = search_src.shape
-        # print("search src shape: {}".format(search_src.shape))
         search_src = search_src.flatten(2).permute(2, 0, 1) # tgt
         search_pos_embed = search_pos_embed.flatten(2).permute(2, 0, 1)
         search_mask = search_mask.flatten(1)
@@ -77,8 +73,7 @@ class Transformer(nn.Module):
                           encoder_pos=template_pos_embed,
                           decoder_pos=search_pos_embed)
 
-        # print("hs: {}".format(hs.shape))
-        return hs.transpose(1, 2), memory.permute(1, 2, 0).view(bs, c, h_template, w_template)
+        return hs.transpose(1, 2), memory
 
 
 class TransformerEncoder(nn.Module):

@@ -46,8 +46,12 @@ class TRTR(nn.Module):
         self.backbone = backbone
         self.aux_loss = aux_loss
 
+        self.template_src_proj = None
+        self.template_mask = None
+        self.template_pos = None
+        self.memory = None
 
-    def forward(self, template_samples: NestedTensor, search_samples: NestedTensor):
+    def forward(self, search_samples: NestedTensor, template_samples: NestedTensor = None):
         """ template_samples is a NestedTensor for template image:
                - samples.tensor: batched images, of shape [batch_size x 3 x H_template x W_template]
                - samples.mask: a binary mask of shape [batch_size x H_template x W_template], containing 1 on padded pixels
@@ -73,19 +77,27 @@ class TRTR(nn.Module):
         if isinstance(search_samples, (torch.Tensor)):
             search_samples = nested_tensor_from_tensor_list(search_samples)
 
+
+        template_features = None
+        template_pos = None
+        if template_samples is not None:
+            template_features, self.template_pos  = self.backbone(template_samples)
+
+            template_src, self.template_mask = template_features[-1].decompose()
+            self.template_src_proj = self.input_proj(template_src)
+
         start = time.time()
-        template_features, template_pos, search_features, search_pos  = self.backbone(template_samples, search_samples)
-        # print("feature extraction: {}".format(time.time() - start))
-
-        template_src, template_mask = template_features[-1].decompose()
+        search_features, search_pos  = self.backbone(search_samples)
+        # print("search image feature extraction: {}".format(time.time() - start))
         search_src, search_mask = search_features[-1].decompose()
-        assert search_mask is not None
-        assert template_mask is not None
 
+        assert search_mask is not None
         assert search_src.shape[-1] == self.decoder_query and search_src.shape[-2] == self.decoder_query
 
-        hs = self.transformer(self.input_proj(template_src), template_mask, template_pos[-1],
-                              self.input_proj(search_src), search_mask, search_pos[-1])[0]
+        if template_samples is not None:
+            hs, self.memory = self.transformer(self.template_src_proj, self.template_mask, self.template_pos[-1], self.input_proj(search_src), search_mask, search_pos[-1])
+        else:
+            hs = self.transformer(self.template_src_proj, self.template_mask, self.template_pos[-1], self.input_proj(search_src), search_mask, search_pos[-1], self.memory)[0]
 
         hs = hs.flatten(2) # for following fully connected layer
         # print("hs flattened : {}".format(hs.shape))

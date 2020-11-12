@@ -28,6 +28,7 @@ class Tracker(object):
             T.ToTensor(), # Converts a numpy.ndarray (H x W x C) in the range [0, 255] to a torch.FloatTensor of shape (C x H x W) in the range [0.0, 1.0]
             T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
+        self.first_frame = False
 
     def _bbox_clip(self, bbox, boundary):
         x1 = max(0, bbox[0])
@@ -64,6 +65,7 @@ class Tracker(object):
 
         # normalize and conver to torch.tensor
         self.template = self.image_normalize(np.round(template_image).astype(np.uint8)).unsqueeze(0).cuda()
+        self.first_frame = True
 
         # debug
         return template_image
@@ -87,7 +89,11 @@ class Tracker(object):
         search = self.image_normalize(np.round(search_image).astype(np.uint8)).unsqueeze(0).cuda()
 
         with torch.no_grad():
-            outputs = self.model(self.template, search)
+            if self.first_frame:
+                outputs = self.model(search, self.template)
+                self.first_frame = False
+            else:
+                outputs = self.model(search)
 
         outputs = self.postprocess(outputs, torch.as_tensor(search.shape[-2:]).unsqueeze(0))
 

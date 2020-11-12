@@ -97,26 +97,17 @@ class Joiner(nn.Sequential):
     def __init__(self, backbone, position_embedding):
         super().__init__(backbone, position_embedding)
 
-    def forward(self, template_tensor_list: NestedTensor, search_tensor_list: NestedTensor):
-        template_xs = self[0](template_tensor_list) # extract feature from template image (template_embedding)
-        template_out: List[NestedTensor] = []
-        template_pos = []
-        for name, x in template_xs.items():
-            template_out.append(x)
-            # position encoding
-            template_pos.append(self[1](x).to(x.tensors.dtype))
-            # print("template imtermidiate layer embedding{}: x shape:{}, pos shape: {}".format(name, template_out[-1].tensors.shape, template_pos[-1].shape))
+    def forward(self, tensor_list: NestedTensor):
 
-        search_xs = self[0](search_tensor_list) # extract feature from search image (search_embedding)
-        search_out: List[NestedTensor] = []
-        search_pos = []
-        for name, x in search_xs.items():
-            search_out.append(x)
+        xs = self[0](tensor_list) # extract feature from search image (embedding)
+        out: List[NestedTensor] = []
+        pos = []
+        for name, x in xs.items():
+            out.append(x)
             # position encoding
-            search_pos.append(self[1](x).to(x.tensors.dtype))
-            # print("search imtermidiate layer embedding{}: x shape:{}, pos shape: {}".format(name, search_out[-1].tensors.shape, search_pos[-1].shape))
+            pos.append(self[1](x).to(x.tensors.dtype))
 
-        return template_out, template_pos, search_out, search_pos
+        return out, pos
 
 def build_backbone(args):
     position_embedding = build_position_encoding(args)
