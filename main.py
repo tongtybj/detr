@@ -41,7 +41,6 @@ def get_args_parser():
                         help="Name of the convolutional backbone to use")
     parser.add_argument('--dilation', action='store_false',
                         help="If true, we replace stride with dilation in the last convolutional block (DC5)") #defualt is true
-    parser.add_argument('--return_interm_layers', action='store_true')
     parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
                         help="Type of positional embedding to use on top of the image features")
 
@@ -62,7 +61,9 @@ def get_args_parser():
                         help="Number of query slots")
     parser.add_argument('--pre_norm', action='store_true')
     parser.add_argument('--decoder_query', default=16, type=int) # hard-coding, should be obtained from the backbone calculation with the search_size
-
+    parser.add_argument('--return_layers', default=[], nargs='+')
+    parser.add_argument('--weighted', action='store_false',
+                        help="the weighted for the multiple input embedding for transformer")
 
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',

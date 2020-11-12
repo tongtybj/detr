@@ -20,7 +20,7 @@ import time
 
 class TRTR(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbone, transformer, decoder_query, bbox_head_hidden_dimension = None, aux_loss=False):
+    def __init__(self, backbone, transformer, decoder_query, bbox_head_hidden_dimension = None, aux_loss=False, weighted=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -38,18 +38,25 @@ class TRTR(nn.Module):
 
         if not bbox_head_hidden_dimension:
             bbox_head_hidden_dimension = hidden_dim
-        self.bbox_embed = MLP(hidden_dim * decoder_query * decoder_query, bbox_head_hidden_dimension, 4, 3) # TODO: what is a good head?
+        self.bbox_embed = MLP(hidden_dim * decoder_query * decoder_query, bbox_head_hidden_dimension, 4, 3)
         #for param in self.bbox_embed.parameters():
         #    print(type(param), param.size(), param.requires_grad)
 
-        self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
+        #self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
+        self.input_projs = nn.ModuleList(nn.Conv2d(num_channels, hidden_dim, kernel_size=1) for num_channels in backbone.num_channels_list)
+
+        self.weighted = weighted
+        if self.weighted:
+            self.cls_weight = nn.Parameter(torch.ones(len(backbone.num_channels_list)))
+            self.loc_weight = nn.Parameter(torch.ones(len(backbone.num_channels_list)))
+
         self.backbone = backbone
         self.aux_loss = aux_loss
 
-        self.template_src_proj = None
+        self.template_src_projs = []
         self.template_mask = None
         self.template_pos = None
-        self.memory = None
+        self.memory = []
 
     def forward(self, search_samples: NestedTensor, template_samples: NestedTensor = None):
         """ template_samples is a NestedTensor for template image:
@@ -83,30 +90,63 @@ class TRTR(nn.Module):
         if template_samples is not None:
             template_features, self.template_pos  = self.backbone(template_samples)
 
-            template_src, self.template_mask = template_features[-1].decompose()
-            self.template_src_proj = self.input_proj(template_src)
+            self.template_mask = template_features[-1].mask
+            self.template_src_projs = []
+            for input_proj, template_feature in zip(self.input_projs, template_features):
+                self.template_src_projs.append(input_proj(template_feature.tensors))
+
+            self.memory = []
 
         start = time.time()
         search_features, search_pos  = self.backbone(search_samples)
         # print("search image feature extraction: {}".format(time.time() - start))
-        search_src, search_mask = search_features[-1].decompose()
+        search_mask = search_features[-1].mask
 
         assert search_mask is not None
-        assert search_src.shape[-1] == self.decoder_query and search_src.shape[-2] == self.decoder_query
+        assert self.template_mask is not None
 
-        if template_samples is not None:
-            hs, self.memory = self.transformer(self.template_src_proj, self.template_mask, self.template_pos[-1], self.input_proj(search_src), search_mask, search_pos[-1])
+        search_src_projs = []
+        for input_proj, search_feature in zip(self.input_projs, search_features):
+            search_src_projs.append(input_proj(search_feature.tensors))
+
+
+        hs_list = []
+        for i, (template_src_proj, search_src_proj) in enumerate(zip(self.template_src_projs, search_src_projs)):
+            if template_samples is not None:
+                hs, memory = self.transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1])
+                self.memory.append(memory)
+            else:
+                hs = self.transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1], self.memory[i])[0]
+
+            hs = hs.flatten(2) # for following fully connected layer
+            # print("hs flattened : {}".format(hs.shape))
+            hs_list.append(hs)
+
+
+        # sum
+        hs_cls = None
+        hs_loc = None
+
+        def avg(lst):
+            return sum(lst) / len(lst)
+
+        def weighted_avg(lst, weight):
+            s = 0
+            for i in range(len(weight)):
+                s += lst[i] * weight[i]
+            return s
+
+        if self.weighted:
+            cls_weight = F.softmax(self.cls_weight, 0)
+            loc_weight = F.softmax(self.loc_weight, 0)
+            hs_cls, hs_loc =  weighted_avg(hs_list, cls_weight), weighted_avg(hs_list, loc_weight)
         else:
-            hs = self.transformer(self.template_src_proj, self.template_mask, self.template_pos[-1], self.input_proj(search_src), search_mask, search_pos[-1], self.memory)[0]
+            hs_cls, hs_loc =  avg(hs_list), avg(hs_list)
 
-        hs = hs.flatten(2) # for following fully connected layer
-        # print("hs flattened : {}".format(hs.shape))
-        outputs_class = self.class_embed(hs)
+        outputs_class = self.class_embed(hs_cls)
         start = time.time()
-        outputs_coord = self.bbox_embed(hs).sigmoid()  # 0 ~ 1
+        outputs_coord = self.bbox_embed(hs_loc).sigmoid()  # 0 ~ 1
         #print("bbox regrasion head: {}".format(time.time() - start))
-        # print("outputs_class: {}".format(outputs_class.shape))
-        # print("outputs_coord: {}".format(outputs_coord.shape))
         out = {'pred_logit': outputs_class[-1], 'pred_box': outputs_coord[-1]}
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
@@ -325,6 +365,7 @@ def build(args):
         transformer,
         decoder_query = args.decoder_query,
         aux_loss=args.aux_loss,
+        weighted = args.weighted
     )
 
     weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
