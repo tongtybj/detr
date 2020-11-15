@@ -9,7 +9,7 @@ from torch import nn
 from util import box_ops
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
-                       is_dist_avail_and_initialized)
+                       is_dist_avail_and_initialized, reg_l1_loss, neg_loss)
 
 from .backbone import build_backbone
 from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
@@ -20,12 +20,11 @@ import time
 
 class TRTR(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbone, transformer, decoder_query, bbox_head_hidden_dimension = None, aux_loss=False, weighted=False):
+    def __init__(self, backbone, transformer, aux_loss=False, weighted=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
             transformer: torch module of the transformer architecture. See transformer.py
-            decoder_query: the query size (one side) to feed into the decoder
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
@@ -33,22 +32,19 @@ class TRTR(nn.Module):
 
         hidden_dim = transformer.d_model
 
-        self.decoder_query = decoder_query
-        self.class_embed = nn.Linear(hidden_dim * decoder_query * decoder_query, 2) # fully connected, class: has object or not
+        # heatmap
+        # TODO: try to use MLP or Conv2d_3x3 before fully-connected like CenterNet
+        self.heatmap_embed = nn.Linear(hidden_dim, 1)
+        self.heatmap_embed.bias.data.fill_(-2.19)
 
-        if not bbox_head_hidden_dimension:
-            bbox_head_hidden_dimension = hidden_dim
-        self.bbox_embed = MLP(hidden_dim * decoder_query * decoder_query, bbox_head_hidden_dimension, 4, 3)
-        #for param in self.bbox_embed.parameters():
-        #    print(type(param), param.size(), param.requires_grad)
+        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
 
-        #self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.input_projs = nn.ModuleList(nn.Conv2d(num_channels, hidden_dim, kernel_size=1) for num_channels in backbone.num_channels_list)
 
         self.weighted = weighted
         if self.weighted:
-            self.cls_weight = nn.Parameter(torch.ones(len(backbone.num_channels_list)))
-            self.loc_weight = nn.Parameter(torch.ones(len(backbone.num_channels_list)))
+            self.hm_weight = nn.Parameter(torch.ones(len(backbone.num_channels_list)))
+            self.bbox_weight = nn.Parameter(torch.ones(len(backbone.num_channels_list)))
 
         self.backbone = backbone
         self.aux_loss = aux_loss
@@ -66,14 +62,14 @@ class TRTR(nn.Module):
                - samples.tensor: batched images, of shape [batch_size x 3 x H_search x W_search]
                - samples.mask: a binary mask of shape [batch_size x H_search x W_search], containing 1 on padded pixels
 
-            bakui TODO:
             It returns a dict with the following elements:
-               - "pred_logits": the classification logits (including no-object) for all queries.
-                                Shape= [batch_size x 2]
-               - "pred_boxes": The normalized boxes coordinates for all queries, represented as
-                               (center_x, center_y, height, width). These values are normalized in [0, 1],
-                               relative to the size of each individual image (disregarding possible padding).
-                               See PostProcess for information on how to retrieve the unnormalized bounding box.
+               - "pred_heatmap": The heatmap of the target bbox, of shape= [batch_size x H_search x W_search]
+               - "pred_dense_bbox": The bbox for all query (i.e. all pixels), represented as (reg_x, reg_y, height, width).
+                                    The regression reg O = [ p/stride - p_tilde], where p and p_tilde are the corrdinates
+                                    in input and output, respectively.
+                                    The height and width values are normalized in [0, 1],
+                                    relative to the size of each individual image (disregarding possible padding).
+                                    See PostProcess for information on how to retrieve the unnormalized bounding box.
                - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
                                 dictionnaries containing the two above keys for each decoder layer.
         """
@@ -118,14 +114,12 @@ class TRTR(nn.Module):
             else:
                 hs = self.transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1], self.memory[i])[0]
 
-            hs = hs.flatten(2) # for following fully connected layer
-            # print("hs flattened : {}".format(hs.shape))
             hs_list.append(hs)
 
 
         # sum
-        hs_cls = None
-        hs_loc = None
+        hs_hm = None
+        hs_bbox = None
 
         def avg(lst):
             return sum(lst) / len(lst)
@@ -139,137 +133,102 @@ class TRTR(nn.Module):
         if self.weighted:
             cls_weight = F.softmax(self.cls_weight, 0)
             loc_weight = F.softmax(self.loc_weight, 0)
-            hs_cls, hs_loc =  weighted_avg(hs_list, cls_weight), weighted_avg(hs_list, loc_weight)
+            hs_hm, hs_bbox =  weighted_avg(hs_list, cls_weight), weighted_avg(hs_list, loc_weight)
+            raise # debug
         else:
-            hs_cls, hs_loc =  avg(hs_list), avg(hs_list)
+            hs_hm, hs_bbox =  avg(hs_list), avg(hs_list)
 
-        outputs_class = self.class_embed(hs_cls)
-        start = time.time()
-        outputs_coord = self.bbox_embed(hs_loc).sigmoid()  # 0 ~ 1
-        #print("bbox regrasion head: {}".format(time.time() - start))
-        out = {'pred_logit': outputs_class[-1], 'pred_box': outputs_coord[-1]}
+        outputs_heatmap = self.heatmap_embed(hs_hm)
+        outputs_heatmap = torch.clamp(outputs_heatmap.sigmoid_(), min=1e-4, max=1-1e-4) # for focal loss
+        # print("size of outputs_heatmap: {}, ".format(outputs_heatmap.shape))
+
+        outputs_bbox = self.bbox_embed(hs_bbox).sigmoid()
+        # TODO: whether can you sigmoid() for the offset regression,
+        # YoLo V3 uses sigmoid: https://blog.paperspace.com/how-to-implement-a-yolo-object-detector-in-pytorch/
+        outputs_bbox_reg = outputs_bbox.split(2,-1)[0]
+        outputs_bbox_wh = outputs_bbox.split(2,-1)[1]
+        # print("size of outputs_bbox_reg: {}, outputs_bbox_wh: {}".format(outputs_bbox_reg.shape, outputs_bbox_wh.shape))
+
+
+        out = {'pred_heatmap': outputs_heatmap[-1], 'pred_bbox_reg': outputs_bbox_reg[-1], 'pred_bbox_wh': outputs_bbox_wh[-1]}
         if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
+            out['aux_outputs'] = self._set_aux_loss(outputs_heatmap, outputs_bbox_reg, outputs_bbox_wh)
         return out
 
     @torch.jit.unused
-    def _set_aux_loss(self, outputs_class, outputs_coord):
+    def _set_aux_loss(self, outputs_class, outputs_bbox_reg, outputs_bbox_wh):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
-        return [{'pred_logit': a, 'pred_box': b}
-                for a, b in zip(outputs_class[:-1], outputs_coord[:-1])]
+        return [{'pred_heatmap': a, 'pred_bbox_reg': b, 'pred_bbox_wh': c}
+                for a, b, c  in zip(outputs_class[:-1], outputs_bbox_reg[:-1], outputs_bbox_wh[:-1])]
 
 
 class SetCriterion(nn.Module):
-    """ This class computes the loss for DETR.
-    The process happens in two steps:
-        1) we compute hungarian assignment between ground truth boxes and the outputs of the model
-        2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
+    """ This class computes the loss for TRTR.
     """
-    def __init__(self, weight_dict, eos_coef, losses):
+    def __init__(self, weight_dict):
         """ Create the criterion.
         Parameters:
             weight_dict: dict containing as key the names of the losses and as values their relative weight.
-            eos_coef: relative classification weight applied to the no-object category
             losses: list of all the losses to be applied. See get_loss for list of available losses.
         """
         super().__init__()
         self.weight_dict = weight_dict
-        self.eos_coef = eos_coef
-        self.losses = losses
+        self.losses = [self.loss_heatmap, self.loss_bbox] # workaround for heatmap based boundbox
 
-    def loss_labels(self, outputs, targets, num_boxes):
-        """Classification loss (NLL)
-        targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
+    def loss_heatmap(self, outputs, targets, num_boxes):
+        """ Focal loss for the heatmap
+        targets dicts must contain the key "heatmap" containing a tensor of dim [batch_size]
         """
-        assert 'pred_logit' in outputs
-        src_logits = outputs['pred_logit'] # [bN, 2] (0: non-object, 1: object)
+        assert 'pred_heatmap' in outputs
+        src_heatmap = outputs['pred_heatmap'] # [bN, output_height *  output_width, 1]
+        target_heatmap = torch.stack([t['hm'] for t in targets]) # [bn, output_hegiht, output_width]
+        target_heatmap = target_heatmap.flatten(1).unsqueeze(-1)  # [bn, output_hegiht *  output_width, 1]
 
-        target_classes = torch.as_tensor([t["label"].item() for t in targets], device=src_logits.device) # [bN]
-        # print("target_classes: {}".format(target_classes))
+        loss_hm = neg_loss(src_heatmap, target_heatmap)
 
-        assert src_logits.ndim == 2
-        loss_ce = F.cross_entropy(src_logits, target_classes) # TODO maybe we need to use different weight for object and non-object
-        losses = {'loss_ce': loss_ce}
+        losses = {'loss_hm': loss_hm}
 
         return losses
 
-    def loss_boxes(self, outputs, targets, num_boxes):
-        """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
-           targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
-           The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
+    def loss_bbox(self, outputs, targets, num_boxes):
+        """Compute the losses related to the bounding boxes regression, the L1 regression loss
+           targets dicts must contain the key "boxes" containing a tensor of dim [batch_size, 2]
+           The target boxes regression are expected in format (gt_x / stride - floor(gt_x / stride), gt_x / stride - floor(gt_x / stride)).
+           The target boxes width/height are expected in format (w, h), which is normalized by the input size.
+           TODO: check the effect with/ without the GIoU loss
         """
-        assert 'pred_box' in outputs
+        assert 'pred_bbox_reg' in outputs and 'pred_bbox_wh' in outputs
 
-        all_src_boxes = outputs['pred_box'] # [bN, 4]
-        all_target_boxes = torch.stack([t['bbox'] for t in targets]) # [bn, 4]
-        # print("all_target_boxes: {}".format(all_target_boxes))
-        assert all_src_boxes.shape == all_target_boxes.shape
+        all_src_boxes_reg = outputs['pred_bbox_reg'] # [bN, output_hegiht * output_width, 2]
+        all_target_boxes_reg = torch.stack([t['reg'] for t in targets]) # [bn, 2]
+        all_src_boxes_wh = outputs['pred_bbox_wh'] # [bN, output_hegiht * output_width, 2]
+        all_target_boxes_wh = torch.stack([t['wh'] for t in targets]) # [bn, 2]
+        all_target_boxes_ind = torch.as_tensor([t['ind'].item() for t in targets], device = all_src_boxes_reg.device) # [bn]
 
-        # only calculate the loss for bbox has the object
-        idx = [id for id, t in enumerate(targets) if t["label"] == 1] # only extract the index with object
-        # print("targets: {}".format(targets))
-        src_boxes = all_src_boxes[idx]
-        target_boxes = all_target_boxes[idx]
-        # assert src_boxes.device == target_boxes.device
+        #print("all_target_boxes_reg: {}, all_src_boxes_reg: {}".format(all_target_boxes_reg.shape, all_src_boxes_reg.shape))
+        #print("all_target_boxes_wh: {}, all_src_boxes_wh: {}".format(all_target_boxes_wh.shape, all_src_boxes_wh.shape))
+        #print("all_target_boxes_ind: {}".format(all_target_boxes_ind.shape))
 
-        # debug
-        # print("loss boxes all target boxes: {}".format(all_target_boxes))
-        # print("loss boxes all src boxes: {}".format(all_src_boxes))
 
-        # print("loss boxes idx: {}".format(idx))
-        # print("loss boxes selected target boxes: {}".format(target_boxes))
-        # print("loss boxes selected src boxes: {}".format(src_boxes))
+        # TODO: reservation for only calculate the loss for bbox has the object
+        mask = [id for id, t in enumerate(targets) if t['valid'].item() == 1] # only extract the index with object
+        src_boxes_reg = all_src_boxes_reg[mask]
+        target_boxes_reg = all_target_boxes_reg[mask]
+        src_boxes_wh = all_src_boxes_wh[mask]
+        target_boxes_wh = all_target_boxes_wh[mask]
+        target_boxes_ind = all_target_boxes_ind[mask]
 
-        loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
+        #loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
+        loss_bbox_reg = reg_l1_loss(src_boxes_reg, target_boxes_ind, target_boxes_reg)
+        loss_bbox_wh = reg_l1_loss(src_boxes_wh, target_boxes_ind, target_boxes_wh)
 
         losses = {}
-        losses['loss_bbox'] = loss_bbox.sum() / num_boxes
+        losses['loss_bbox_reg'] = loss_bbox_reg.sum() / num_boxes
+        losses['loss_bbox_wh'] = loss_bbox_wh.sum() / num_boxes
 
-        loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
-            box_ops.box_cxcywh_to_xyxy(src_boxes),
-            box_ops.box_cxcywh_to_xyxy(target_boxes)))
-        losses['loss_giou'] = loss_giou.sum() / num_boxes
         return losses
-
-    def loss_masks(self, outputs, targets, num_boxes):
-        """Compute the losses related to the masks: the focal loss and the dice loss.
-           targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w]
-        """
-        assert "pred_masks" in outputs
-
-        src_idx = self._get_src_permutation_idx(indices)
-        tgt_idx = self._get_tgt_permutation_idx(indices)
-        src_masks = outputs["pred_masks"]
-        src_masks = src_masks[src_idx]
-        masks = [t["masks"] for t in targets]
-        # TODO use valid to mask invalid areas due to padding in loss
-        target_masks, valid = nested_tensor_from_tensor_list(masks).decompose()
-        target_masks = target_masks.to(src_masks)
-        target_masks = target_masks[tgt_idx]
-
-        # upsample predictions to the target size
-        src_masks = interpolate(src_masks[:, None], size=target_masks.shape[-2:],
-                                mode="bilinear", align_corners=False)
-        src_masks = src_masks[:, 0].flatten(1)
-
-        target_masks = target_masks.flatten(1)
-        target_masks = target_masks.view(src_masks.shape)
-        losses = {
-            "loss_mask": sigmoid_focal_loss(src_masks, target_masks, num_boxes),
-            "loss_dice": dice_loss(src_masks, target_masks, num_boxes),
-        }
-        return losses
-
-    def get_loss(self, loss, outputs, targets, num_boxes, **kwargs):
-        loss_map = {
-            'labels': self.loss_labels,
-            'boxes': self.loss_boxes,
-            'masks': self.loss_masks
-        }
-        assert loss in loss_map, f'do you really want to compute {loss} loss?'
-        return loss_map[loss](outputs, targets, num_boxes, **kwargs)
 
     def forward(self, outputs, targets):
         """ This performs the loss computation.
@@ -280,7 +239,9 @@ class SetCriterion(nn.Module):
         """
 
         # Compute the average number of target boxes accross all nodes, for normalization purposes
-        num_boxes = sum(t["label"].item() for t in targets) # 0: non-object, 1:  object
+        # TODO: this is a reserved function fro a negative sample training to improve the robustness like DasiamRPN
+        num_boxes = sum(t['valid'].item() for t in targets)
+        # print("num of valid boxes: {}".format(num_boxes)) # debug
         num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)
@@ -289,22 +250,18 @@ class SetCriterion(nn.Module):
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
-            losses.update(self.get_loss(loss, outputs, targets, num_boxes))
+            losses.update(loss(outputs, targets, num_boxes))
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if 'aux_outputs' in outputs:
             for i, aux_outputs in enumerate(outputs['aux_outputs']):
                 for loss in self.losses:
-                    if loss == 'masks':
-                        # Intermediate masks losses are too costly to compute, we ignore them.
-                        continue
-                    kwargs = {}
-                    l_dict = self.get_loss(loss, aux_outputs, targets, num_boxes, **kwargs)
+                    l_dict = loss(aux_outputs, targets, num_boxes)
                     l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
                     losses.update(l_dict)
 
-        return losses
 
+        return losses
 
 class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
@@ -359,28 +316,23 @@ def build(args):
     backbone = build_backbone(args)
     transformer = build_transformer(args)
 
-    print("start build ")
+    print("start build model")
     model = TRTR(
         backbone,
         transformer,
-        decoder_query = args.decoder_query,
         aux_loss=args.aux_loss,
         weighted = args.weighted
     )
 
-    weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
-    weight_dict['loss_giou'] = args.giou_loss_coef
+    weight_dict = {'loss_hm': 1, 'loss_bbox_reg': args.reg_loss_coef, 'loss_bbox_wh': args.wh_loss_coef}
 
-    # TODO this is a hack
     if args.aux_loss:
         aux_weight_dict = {}
         for i in range(args.dec_layers - 1):
             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
         weight_dict.update(aux_weight_dict)
 
-    losses = ['labels', 'boxes']
-    criterion = SetCriterion(weight_dict=weight_dict,
-                             eos_coef=args.eos_coef, losses=losses)
+    criterion = SetCriterion(weight_dict=weight_dict)
     criterion.to(device)
     postprocessors = {'bbox': PostProcess()}
 

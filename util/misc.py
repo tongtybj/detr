@@ -13,6 +13,7 @@ import pickle
 from typing import Optional, List
 
 import torch
+import torch.nn.functional as F
 import torch.distributed as dist
 from torch import Tensor
 
@@ -267,7 +268,7 @@ def get_sha():
 
 def collate_fn(batch):
     # batch: a list (batch_size) of dictionally from dataset.__item__
-    batch = list(zip(*batch)) # batch = [(3, h_temp, w_temp) x bn, (bn, 3, h_serch, w_serch) x bn, (target_dict) x bn]
+    batch = list(zip(*batch)) # batch = [(3, h_temp, w_temp) x bn, (3, h_serch, w_serch) x bn, (target_dict) x bn]
 
     assert len(batch) == 3
 
@@ -472,3 +473,56 @@ def interpolate(input, size=None, scale_factor=None, mode="nearest", align_corne
         return _new_empty_tensor(input, output_shape)
     else:
         return torchvision.ops.misc.interpolate(input, size, scale_factor, mode, align_corners)
+
+
+def reg_l1_loss(output, ind, target):
+    """
+    Arguments:
+      output: [bN, w * h, depth]
+      ind: [bN]
+      target: [bN, depth]
+    """
+
+    #print("reg_l1_loss: ind {}".format(ind))
+    #for id in range(ind.size(0)):
+    #    print("reg_l1_loss: output with index {}".format(output[id][ind[id]]))
+
+    dim  = output.size(2)
+    ind  = ind.unsqueeze(-1).unsqueeze(-1)
+    ind = ind.expand(ind.size(0), ind.size(1), dim)
+    pred = output.gather(1, ind).squeeze(1)
+    # print("reg_l1_loss: pred: {}".format(pred))
+
+
+    loss = F.l1_loss(pred, target, reduction='none')
+    return loss
+
+def neg_loss(pred, gt):
+  ''' FocalLoss for heatmap (copy from CenterNet).
+    Arguments:
+      pred (batch x c x h x w)
+      gt (batch x c x h x w)
+  '''
+  pos_inds = gt.eq(1).float()
+  neg_inds = gt.lt(1).float()
+
+  neg_weights = torch.pow(1 - gt, 4)
+
+  loss = 0
+
+  pos_loss = torch.log(pred) * torch.pow(1 - pred, 2) * pos_inds
+  neg_loss = torch.log(1 - pred) * torch.pow(pred, 2) * neg_weights * neg_inds
+
+  num_pos  = pos_inds.float().sum()
+
+  # TODO: please remove this debug code:
+  assert num_pos == gt.shape[0]
+
+  pos_loss = pos_loss.sum()
+  neg_loss = neg_loss.sum()
+
+  if num_pos == 0:
+    loss = loss - neg_loss
+  else:
+    loss = loss - (pos_loss + neg_loss) / num_pos
+  return loss

@@ -55,7 +55,6 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         optimizer.step()
 
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
-        #metric_logger.update(class_error=loss_dict_reduced['class_error'])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
 
@@ -71,7 +70,6 @@ def evaluate(model, criterion, postprocessors, data_loader, device, output_dir):
     criterion.eval()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
-    #metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Val:'
 
     for template_samples, search_samples, targets in metric_logger.log_every(data_loader, 10, header):
@@ -92,13 +90,6 @@ def evaluate(model, criterion, postprocessors, data_loader, device, output_dir):
         metric_logger.update(loss=sum(loss_dict_reduced_scaled.values()),
                              **loss_dict_reduced_scaled,
                              **loss_dict_reduced_unscaled)
-        #metric_logger.update(class_error=loss_dict_reduced['class_error'])
-
-        # do post processing if necessary for further testing
-        """
-        orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
-        results = postprocessors['bbox'](outputs, orig_target_sizes)
-        """
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()

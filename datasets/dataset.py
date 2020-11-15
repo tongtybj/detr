@@ -26,12 +26,16 @@ import torch
 from torch.utils.data import Dataset
 from pathlib import Path
 import torchvision.transforms as T
+import math
 
 try:
     from .augmentation import Augmentation, corner2center, center2corner, Center
+    from .utils import gaussian_radius, draw_umich_gaussian
 except ImportError as e:
     if "attempted relative import with no known parent package" == str(e):
-        from augmentation import Augmentation, corner2center, center2corner, Center # for test.py
+         # for test.py
+        from augmentation import Augmentation, corner2center, center2corner, Center
+        from utils import gaussian_radius, draw_umich_gaussian
 
 logger = logging.getLogger("global")
 
@@ -168,12 +172,29 @@ class TrkDataset(Dataset):
                  template_shift, template_scale, template_color,
                  search_shift, search_scale, search_color,
                  exempler_size = 127, search_size = 255,
-                 negative_rate = 0.5):
+                 negative_rate = 0.5,
+                 resnet_dilation = []):
         super(TrkDataset, self).__init__()
 
         self.exempler_size = exempler_size
         self.search_size = search_size
         self.negative_rate = negative_rate
+
+        # woraround for resnet:
+        if resnet_dilation:
+            resnet_dilation = [False, True, True]
+        else:
+            resnet_dilation = [False, False, False]
+
+        stride = 4
+        for dilation in resnet_dilation:
+            if not dilation:
+                stride = stride * 2
+        self.output_size = (self.search_size + stride - 1) // stride
+
+        # debug (TODO remove)
+        if self.search_size == 255:
+            assert self.output_size == 32
 
         # create sub dataset
         self.all_dataset = []
@@ -272,17 +293,13 @@ class TrkDataset(Dataset):
 
     def __getitem__(self, index):
 
-        # only do for odd index
-        neg = 0
-        if index % 2 == 1:
-            neg = self.negative_rate and self.negative_rate > np.random.random()
-
         index = self.pick[index]
         dataset, index = self._find_dataset(index)
 
         # gray = cfg.DATASET.GRAY and cfg.DATASET.GRAY > np.random.random()
 
         # get one dataset
+        neg = 0 # TODO: get a negative sample to improve the performance of heatmap like Dasiamese RPN
         if neg:
             template = dataset.get_random_target(index)
             search = np.random.choice(self.all_dataset).get_random_target()
@@ -304,10 +321,30 @@ class TrkDataset(Dataset):
                                         template_box,
                                         self.exempler_size)
 
-        search, bbox = self.search_aug(search_image,
+        search, input_bbox = self.search_aug(search_image,
                                        search_box,
                                        self.search_size)
 
+
+        hm = np.zeros((self.output_size, self.output_size), dtype=np.float32)
+
+
+
+        scale = float(self.output_size) / float(self.search_size)
+        output_bbox = [input_bbox.x1 * scale, input_bbox.y1 * scale, input_bbox.x2 * scale, input_bbox.y2 * scale]
+        radius = gaussian_radius((math.ceil(output_bbox[3] - output_bbox[1]), math.ceil(output_bbox[2] - output_bbox[0])))
+        radius = max(0, int(radius))
+        ct = np.array([(output_bbox[0] + output_bbox[2]) / 2, (output_bbox[1] + output_bbox[3]) / 2], dtype=np.float32)
+        ct_int = ct.astype(np.int32) # TODO: try to use np.around, which gives a different range of reg with (-0.5, 0.5)
+        reg = torch.tensor(ct - ct_int, dtype=torch.float32) # range is [0, 1)
+        wh = torch.tensor([input_bbox[2] - input_bbox[0], input_bbox[3] - input_bbox[1]], dtype=torch.float32) / float(self.search_size) # normalized
+        ind = ct_int[1] * self.output_size + ct_int[0]
+        draw_umich_gaussian(hm, ct_int, radius)
+        hm = torch.tensor(hm, dtype=torch.float32) # range is [0, 1)
+
+        valid = not neg # TODO: reservation for the nagative sample, like DasiamRPN
+
+        # print("index: {}, gaussian radius: {}, ct: {}, reg: {}, wh: {}, valid: {}".format(index, radius, ct, reg, wh, valid)) # debug
 
         """
         print("dataset idx: {}".format(index))
@@ -324,15 +361,9 @@ class TrkDataset(Dataset):
         # we have to change to type from float to uint8 for torchvision.transforms.ToTensor
         # https://pytorch.org/docs/stable/torchvision/transforms.html#torchvision.transforms.ToTensor
         template = self.normalize(np.round(template).astype(np.uint8))
-        search, bbox = self.normalize(np.round(search).astype(np.uint8), bbox)
+        search = self.normalize(np.round(search).astype(np.uint8))
 
-        # print("aug search image for {}: {}".format(index, search))
-
-        target_dict =  {
-            'label': torch.as_tensor([1 if neg == 0 else 0]), # 0: non-object, 1: object
-            'bbox': bbox,
-            'index': torch.as_tensor([index])
-        }
+        target_dict =  {'hm': hm, 'reg': reg, 'wh': wh, 'ind': torch.as_tensor(ind), 'valid': torch.as_tensor(valid), 'bbox_debug': torch.as_tensor(input_bbox)}
 
         return template, search, target_dict
 
@@ -344,5 +375,6 @@ def build(image_set, args):
                          args.template_aug_shift, args.template_aug_scale, args.template_aug_color,
                          args.search_aug_shift, args.search_aug_scale, args.search_aug_color,
                          args.exempler_size, args.search_size,
-                         args.negative_aug_rate)
+                         args.negative_aug_rate,
+                         args.resnet_dilation)
     return dataset

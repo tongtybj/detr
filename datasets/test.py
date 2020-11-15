@@ -39,6 +39,8 @@ def get_args_parser():
     parser.add_argument('--search_aug_color', default=1.0, type=float)
     parser.add_argument('--exempler_size', default=127, type=int)
     parser.add_argument('--search_size', default=255, type=int)
+    parser.add_argument('--resnet_dilation', action='store_false',
+                        help="If true, we replace stride with dilation in the last convolutional block (DC5)") #defualt is true
     parser.add_argument('--negative_aug_rate', default=0.8, type=float)
 
     parser.add_argument('--device', default='cuda',
@@ -85,15 +87,14 @@ def main(args):
 
         print("the len of dataset_train: {}".format(len(dataset_train)))
 
-        for i,obj in enumerate(data_loader_train):
+        for i, obj in enumerate(data_loader_train):
             print("{} iterator has {} batches".format(i, len(obj[2])))
             template_samples = obj[0].to(device) # use several time to load to gpu
             search_samples = obj[1].to(device)  # use several time to load to gpu
-            targets = [{k: v.to(device) for k, v in t.items()} for t in obj[2]]  # use several time to load to gpu
+            targets = [{k: v.to(device) for k, v in t.items()} for t in obj[2]]
 
 
-            # debug
-            print(targets)
+            # print(targets) # debug
             image_revert = T.Compose([
                 T.Normalize(
                     -np.array(dataset_train.image_normalize.transforms[1].mean)
@@ -103,6 +104,7 @@ def main(args):
             ])
 
             for batch_i in range(len(obj[2])):
+
                 revert_search_image = image_revert(search_samples.tensors[batch_i])
                 search_image = revert_search_image.to('cpu').detach().numpy().copy()
                 search_image = (np.round(search_image.transpose(1,2,0))).astype(np.uint8).copy()
@@ -111,13 +113,31 @@ def main(args):
                 template_image = revert_template_image.to('cpu').detach().numpy().copy()
                 template_image = (np.round(template_image.transpose(1,2,0))).astype(np.uint8).copy()
 
-                print("bbox: {}".format(targets[batch_i]["bbox"]))
-                h, w = search_image.shape[:2]
-                xyxy = box_cxcywh_to_xyxy(targets[batch_i]["bbox"]).to("cpu")
-                bbox_int = (torch.round(xyxy * torch.tensor([w, h, w, h]))).int()
-                print(type(search_image))
-                cv2.rectangle(search_image, (bbox_int[0], bbox_int[1]), (bbox_int[2], bbox_int[3]), (0,255,0))
+                output_size = targets[batch_i]["hm"].shape[0]
+                sesarch_size = search_image.shape[0]
 
+                ind = targets[batch_i]["ind"].item()
+                ct = torch.as_tensor([ind % output_size, ind // output_size], dtype=torch.float32)
+
+                revert_ct = (ct + targets[batch_i]["reg"].to('cpu')) * float(sesarch_size) / float(output_size)
+                revert_wh = targets[batch_i]["wh"].to('cpu') * float(sesarch_size)
+                revert_bbox = torch.round(box_cxcywh_to_xyxy(torch.cat([revert_ct, revert_wh]))).int()
+                # draw the reverted bbox from the target info
+                cv2.rectangle(search_image, (revert_bbox[0], revert_bbox[1]), (revert_bbox[2], revert_bbox[3]), (0,0,255), 2)
+                # draw the orginal ground truth bbox
+                orig_bbox = torch.round(targets[batch_i]["bbox_debug"].to('cpu')).int()
+                cv2.rectangle(search_image, (orig_bbox[0], orig_bbox[1]), (orig_bbox[2], orig_bbox[3]), (0,255,0))
+                cv2.circle(search_image, (np.round(revert_ct[0]), np.round(revert_ct[1])), 2, (0,255,0), -1) # no need
+
+                heatmap = (torch.round(targets[batch_i]["hm"] * 255)).to('cpu').detach().numpy().astype(np.uint8)
+                # print("center of gaussian peak: {}".format(np.unravel_index(np.argmax(heatmap), heatmap.shape)))
+                # mask the heatmap to the original image
+                heatmap_resize = cv2.resize(heatmap, search_image.shape[1::-1])
+                # print("heatmap peal: {}, revert_wh: {}".format(np.unravel_index(np.argmax(heatmap_resize), heatmap_resize.shape), revert_ct))
+                heatmap_color = np.stack([heatmap_resize, np.zeros(search_image.shape[1::-1], dtype=np.uint8), heatmap_resize], -1)
+                search_image = np.round(0.4 * heatmap_color + 0.6 * search_image.copy()).astype(np.uint8)
+
+                cv2.imshow('heatmap', heatmap)
                 cv2.imshow('search_image', search_image)
                 cv2.imshow('template_image', template_image)
                 k = cv2.waitKey(0)

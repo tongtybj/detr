@@ -100,8 +100,13 @@ class Backbone(BackboneBase):
                  train_backbone: bool,
                  return_layers: List,
                  dilation: bool):
+        if dilation:
+            dilation = [False, True, True] # workaround to achieve stride of 8
+        else:
+            dilation = [False, False, False]
+
         backbone = getattr(torchvision.models, name)(
-            replace_stride_with_dilation=[False, False, dilation],
+            replace_stride_with_dilation=dilation,
             pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d)
         super().__init__(name, backbone, train_backbone, return_layers)
 
@@ -130,7 +135,7 @@ def build_backbone(args):
     position_embedding = build_position_encoding(args)
     train_backbone = args.lr_backbone > 0
 
-    backbone = Backbone(args.backbone, train_backbone, args.return_layers, args.dilation)
+    backbone = Backbone(args.backbone, train_backbone, args.return_layers, args.resnet_dilation)
     model = Joiner(backbone, position_embedding)
     model.num_channels_list = backbone.num_channels_list
     return model
