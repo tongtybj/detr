@@ -108,10 +108,6 @@ def get_args_parser():
     parser.add_argument('--benchmark_test_step', default=1, type=int,
                         help='step to test benchmark')
 
-    # post process
-    parser.add_argument('--window_factor', default=0.44, type=float,
-                        help='the factor of the hanning window for heatmap post process')
-
     return parser
 
 

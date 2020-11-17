@@ -8,12 +8,10 @@ from torch import nn
 
 from util import box_ops
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
-                       accuracy, get_world_size, interpolate,
-                       is_dist_avail_and_initialized, reg_l1_loss, neg_loss)
+                       reg_l1_loss, neg_loss,
+                       get_world_size, is_dist_avail_and_initialized)
 
 from .backbone import build_backbone
-from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
-                           dice_loss, sigmoid_focal_loss)
 from .transformer import build_transformer
 
 import time
@@ -265,67 +263,23 @@ class SetCriterion(nn.Module):
         return losses
 
 class PostProcess(nn.Module):
-    def __init__(self, heatmap_size, window_factor):
+    def __init__(self):
 
         super().__init__()
 
-        self.heatmap_size = heatmap_size
-        hanning = np.hanning(self.heatmap_size)
-        self.window = torch.as_tensor(np.outer(hanning, hanning).flatten())
-        self.window_factor = window_factor
-
     @torch.no_grad()
-    def forward(self, outputs, target_sizes):
+    def forward(self, outputs):
         """ Perform the computation
         Parameters:
             outputs: raw outputs of the model
-            target_sizes: tensor of dimension [batch_size x 2] containing the size of each images of the batch
         """
 
-        start_time = time.time()
-        heatmap = outputs['pred_heatmap'].sigmoid().squeeze(-1).cpu()
-        assert len(heatmap) ==  len(target_sizes)
-        assert heatmap.size(1) == self.heatmap_size * self.heatmap_size
-        # print("postprocess heatmap shape: {}".format(heatmap.shape))
-        raw_heatmap = heatmap.view(heatmap.size(0), self.heatmap_size, self.heatmap_size) # as a image format
-        # print("postprocess raw heatmap shape: {}".format(raw_heatmap.shape))
+        # do post sigmoid process
+        heatmap = outputs['pred_heatmap'].sigmoid().squeeze(-1)
 
+        out = {'pred_heatmap': heatmap, 'pred_bbox_reg': outputs['pred_bbox_reg'], 'pred_bbox_wh': outputs['pred_bbox_wh']}
 
-        # distance penalty function to  for the heatmap
-        # TODO: do we need scale and aspect ration penaly like SiamRPN (anchor based)?
-        window = self.window.unsqueeze(0)
-        if len(target_sizes) > 1:
-            window = self.window.unsqueeze(0).expand(len(target_sizes), self.window.size(0), self.window.size(0))
-
-        post_heatmap = heatmap * (1 -  self.window_factor) + self.window * self.window_factor
-        # print("postprocess post heatmap shape before view: {}".format(post_heatmap.shape))
-
-        best_idx = torch.argmax(post_heatmap, dim=-1)
-        post_heatmap = post_heatmap.view(post_heatmap.size(0), self.heatmap_size, self.heatmap_size, 1) # as a image format
-        best_score = torch.stack([hm[idx] for hm, idx in zip(heatmap, best_idx)], dim = 0)
-        # print("postprocess best score: {}".format(best_score))
-        # print("postprocess post heatmap shape: {}".format(post_heatmap.shape))
-
-        # do not convert to [x0, y0, x1, y1] format
-        # boxes = box_ops.box_cxcywh_to_xyxy(out_bboxes)
-        bbox_reg_map = outputs['pred_bbox_reg'].cpu()
-        bbox_reg = torch.stack([reg_map[idx] for reg_map, idx in zip(bbox_reg_map, best_idx)], dim = 0)
-        ct_int = torch.stack([best_idx % self.heatmap_size, best_idx // self.heatmap_size], dim = -1)
-        # print("postprocess best idx {}, ct_int: {}, reg: {}".format(best_idx, ct_int, bbox_reg))
-        bbox_ct = (ct_int + bbox_reg) * target_sizes.float() / float(self.heatmap_size)
-        # print("{}, {}".format(target_sizes, self.heatmap_size))
-        # print("postprocess ct: {}".format(bbox_ct))
-
-        bbox_wh_map = outputs['pred_bbox_wh'].cpu()
-        bbox_wh = torch.stack([wh_map[idx] for wh_map, idx in zip(bbox_wh_map, best_idx)], dim = 0)
-        # convert from  relative [0, 1] to absolute [0, height] coordinates
-        bbox_wh = bbox_wh * target_sizes
-        # print("postprocess bbox wh: {}".format(bbox_wh))
-
-        results = [{'raw_hm': raw_hm, 'post_hm': raw_hm, 'score': score, 'bbox_ct': ct, 'bbox_wh': wh} for raw_hm, post_hm, score, ct, wh in zip(raw_heatmap, post_heatmap, best_score, bbox_ct, bbox_wh)]
-
-        # print("postprocess time: {}".format(time.time() - start_time))
-        return results
+        return out
 
 
 class MLP(nn.Module):
@@ -367,7 +321,6 @@ def build(args):
     criterion = SetCriterion(weight_dict=weight_dict)
     criterion.to(device)
 
-    output_size = (args.search_size + backbone.stride - 1) // backbone.stride
-    postprocessors = {'bbox': PostProcess(output_size, args.window_factor)}
+    postprocessors = {'bbox': PostProcess()}
 
     return model, criterion, postprocessors

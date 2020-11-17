@@ -56,10 +56,6 @@ def get_args_parser():
                         help="the weighted for the multiple input embedding for transformer")
 
 
-    # * Segmentation
-    parser.add_argument('--masks', action='store_true',
-                        help="Train segmentation head if the flag is provided")
-
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
                         help="Disables auxiliary decoding losses (loss at each layer)")
@@ -70,9 +66,6 @@ def get_args_parser():
     parser.add_argument('--wh_loss_coef', default=1, type=float,
                         help="weight (coeffficient) about bbox width/height loss")
 
-    # post process
-    parser.add_argument('--window_factor', default=0.44, type=float,
-                        help='the factor of the hanning window for heatmap post process')
 
     # tracking
     parser.add_argument('--video_name', default="", type=str)
@@ -80,6 +73,19 @@ def get_args_parser():
     parser.add_argument('--exemplar_size', default=127, type=int)
     parser.add_argument('--search_size', default=255, type=int)
     parser.add_argument('--context_amount', default=0.5, type=float)
+
+    # * hyper-parameter for tracking
+    parser.add_argument('--score_threshold', default=0.1, type=float,
+                        help='the lower score threshold to recognize a target (score_target > threshold) ')
+    parser.add_argument('--window_steps', default=3, type=int,
+                        help='the pyramid factor to gradually reduce the widow effect')
+    parser.add_argument('--window_factor', default=0.44, type=float,
+                        help='the factor of the hanning window for heatmap post process')
+    parser.add_argument('--tracking_size_penalty_k', default=0.04, type=float,
+                        help='the factor to penalize the change of size')
+    parser.add_argument('--tracking_size_lpf', default=0.33, type=float,
+                        help='the factor of the lpf for size tracking')
+
     return parser
 
 
@@ -165,8 +171,8 @@ def main(args):
         cv2.imshow("post_heatmap", output["post_heatmap"])
         cv2.imshow("result", frame)
 
-        #k = cv2.waitKey(0)
-        k = cv2.waitKey(40)
+        k = cv2.waitKey(0)
+        #k = cv2.waitKey(40)
         if k == 27:         # wait for ESC key to exit
             sys.exit()
 

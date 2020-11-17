@@ -12,6 +12,10 @@ CONTEXT_AMOUNT= 0.5
 def get_exemplar_size():
     return EXEMPLAR_SIZE
 
+def get_context_amount():
+    return CONTEXT_AMOUNT
+
+
 def print_progress(iteration, total, prefix='', suffix='', decimals=1, barLength=100):
     """
     Call in a loop to create terminal progress bar
@@ -49,8 +53,8 @@ def siamfc_like_scale(bbox):
 
     bb_size = [bbox[2]-bbox[0], bbox[3]-bbox[1]]
 
-    wc_z = bb_size[1] + CONTEXT_AMOUNT * sum(bb_size)
-    hc_z = bb_size[0] + CONTEXT_AMOUNT * sum(bb_size)
+    wc_z = bb_size[0] + CONTEXT_AMOUNT * sum(bb_size)
+    hc_z = bb_size[1] + CONTEXT_AMOUNT * sum(bb_size)
 
     s_z = np.sqrt(wc_z * hc_z)
 
