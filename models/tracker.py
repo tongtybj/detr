@@ -12,6 +12,7 @@ import torchvision.transforms as T
 import datasets.utils
 from datasets.utils import crop_image, siamfc_like_scale, get_exemplar_size, get_context_amount # TODO: move to utils
 from util.box_ops import box_cxcywh_to_xyxy
+from util.misc import is_dist_avail_and_initialized
 import cv2
 import time
 
@@ -22,7 +23,11 @@ class Tracker(object):
         self.postprocess = postprocess
 
         self.search_size = search_size
-        self.heatmap_size = (search_size + model.backbone.stride - 1) // model.backbone.stride
+        if is_dist_avail_and_initialized():
+            backbone_stride = model.module.backbone.stride
+        else:
+            backbone_stride = model.backbone.stride
+        self.heatmap_size = (search_size + backbone_stride - 1) // backbone_stride
         self.size_lpf = size_lpf
         self.size_penalty_k = size_penalty_k
 
