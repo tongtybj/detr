@@ -224,6 +224,8 @@ def main(args, tracker):
             track_times = []
             template_image = None
             search_image = None
+            raw_heatmap = None
+            post_heatmap = None
 
             for idx, (img, gt_bbox) in enumerate(video):
                 tic = cv2.getTickCount()
@@ -243,8 +245,10 @@ def main(args, tracker):
                                  pred_bbox_[3] - pred_bbox_[1]]
                     pred_bboxes.append(pred_bbox)
                     scores.append(outputs['score'])
-                    template_image = outputs["template_image"]
-                    search_image = outputs["search_image"]
+                    template_image = outputs['template_image']
+                    search_image = outputs['search_image']
+                    raw_heatmap = outputs['raw_heatmap']
+                    post_heatmap = outputs['post_heatmap']
                 toc += cv2.getTickCount() - tic
                 track_times.append((cv2.getTickCount() - tic)/cv2.getTickFrequency())
                 if idx == 0:
@@ -263,6 +267,8 @@ def main(args, tracker):
                     if args.debug_vis:
                         cv2.imshow("template", template_image)
                         cv2.imshow("search_raw", search_image)
+                        cv2.imshow("raw_heatmap", raw_heatmap)
+                        cv2.imshow("post_heatmap", post_heatmap)
                         k = cv2.waitKey(0)
                         if k == 27:         # wait for ESC key to exit
                             sys.exit()
