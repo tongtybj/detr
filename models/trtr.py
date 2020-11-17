@@ -17,6 +17,7 @@ from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
 from .transformer import build_transformer
 
 import time
+import numpy as np
 
 class TRTR(nn.Module):
     """ This is the DETR module that performs object detection """
@@ -63,13 +64,14 @@ class TRTR(nn.Module):
                - samples.mask: a binary mask of shape [batch_size x H_search x W_search], containing 1 on padded pixels
 
             It returns a dict with the following elements:
-               - "pred_heatmap": The heatmap of the target bbox, of shape= [batch_size x H_search x W_search]
-               - "pred_dense_bbox": The bbox for all query (i.e. all pixels), represented as (reg_x, reg_y, height, width).
-                                    The regression reg O = [ p/stride - p_tilde], where p and p_tilde are the corrdinates
-                                    in input and output, respectively.
-                                    The height and width values are normalized in [0, 1],
-                                    relative to the size of each individual image (disregarding possible padding).
-                                    See PostProcess for information on how to retrieve the unnormalized bounding box.
+               - "pred_heatmap": The heatmap of the target bbox, of shape= [batch_size x (H_search x W_search) x 1]
+               - "pred_dense_reg": The regression of bbox for all query (i.e. all pixels), of shape= [batch_size x (H_search x W_search) x 2]
+                                   The regression reg O = [ p/stride - p_tilde], where p and p_tilde are the corrdinates
+                                   in input and output, respectively.
+               - "pred_dense_wh": The size of bbox for all query (i.e. all pixels), of shape= [batch_size x (H_search x W_search) x 2]
+                                  The height and width values are normalized in [0, 1],
+                                  relative to the size of each individual image (disregarding possible padding).
+                                  See PostProcess for information on how to retrieve the unnormalized bounding box.
                - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
                                 dictionnaries containing the two above keys for each decoder layer.
         """
@@ -138,8 +140,7 @@ class TRTR(nn.Module):
         else:
             hs_hm, hs_bbox =  avg(hs_list), avg(hs_list)
 
-        outputs_heatmap = self.heatmap_embed(hs_hm)
-        outputs_heatmap = torch.clamp(outputs_heatmap.sigmoid_(), min=1e-4, max=1-1e-4) # for focal loss
+        outputs_heatmap = self.heatmap_embed(hs_hm) # we have different sigmoid process for training and inference, so we do not get sigmoid here.
         # print("size of outputs_heatmap: {}, ".format(outputs_heatmap.shape))
 
         outputs_bbox = self.bbox_embed(hs_bbox).sigmoid()
@@ -182,7 +183,7 @@ class SetCriterion(nn.Module):
         targets dicts must contain the key "heatmap" containing a tensor of dim [batch_size]
         """
         assert 'pred_heatmap' in outputs
-        src_heatmap = outputs['pred_heatmap'] # [bN, output_height *  output_width, 1]
+        src_heatmap = torch.clamp(outputs['pred_heatmap'].sigmoid(), min=1e-4, max=1-1e-4) # [bN, output_height *  output_width, 1], clamp for focal loss
         target_heatmap = torch.stack([t['hm'] for t in targets]) # [bn, output_hegiht, output_width]
         target_heatmap = target_heatmap.flatten(1).unsqueeze(-1)  # [bn, output_hegiht *  output_width, 1]
 
@@ -264,7 +265,15 @@ class SetCriterion(nn.Module):
         return losses
 
 class PostProcess(nn.Module):
-    """ This module converts the model's output into the format expected by the coco api"""
+    def __init__(self, heatmap_size, window_factor):
+
+        super().__init__()
+
+        self.heatmap_size = heatmap_size
+        hanning = np.hanning(self.heatmap_size)
+        self.window = torch.as_tensor(np.outer(hanning, hanning).flatten())
+        self.window_factor = window_factor
+
     @torch.no_grad()
     def forward(self, outputs, target_sizes):
         """ Perform the computation
@@ -273,26 +282,49 @@ class PostProcess(nn.Module):
             target_sizes: tensor of dimension [batch_size x 2] containing the size of each images of the batch
         """
 
-        out_logits, out_bboxes = outputs['pred_logit'], outputs['pred_box']
+        start_time = time.time()
+        heatmap = outputs['pred_heatmap'].sigmoid().squeeze(-1).cpu()
+        assert len(heatmap) ==  len(target_sizes)
+        assert heatmap.size(1) == self.heatmap_size * self.heatmap_size
+        # print("postprocess heatmap shape: {}".format(heatmap.shape))
+        raw_heatmap = heatmap.view(heatmap.size(0), self.heatmap_size, self.heatmap_size) # as a image format
+        # print("postprocess raw heatmap shape: {}".format(raw_heatmap.shape))
 
-        assert len(out_logits) ==  len(target_sizes)
-        assert target_sizes.shape[1] == 2
 
-        probs = F.softmax(out_logits, -1)
-        scores, labels = probs.max(-1)
+        # distance penalty function to  for the heatmap
+        # TODO: do we need scale and aspect ration penaly like SiamRPN (anchor based)?
+        window = self.window.unsqueeze(0)
+        if len(target_sizes) > 1:
+            window = self.window.unsqueeze(0).expand(len(target_sizes), self.window.size(0), self.window.size(0))
+
+        post_heatmap = heatmap * (1 -  self.window_factor) + self.window * self.window_factor
+        # print("postprocess post heatmap shape before view: {}".format(post_heatmap.shape))
+
+        best_idx = torch.argmax(post_heatmap, dim=-1)
+        post_heatmap = post_heatmap.view(post_heatmap.size(0), self.heatmap_size, self.heatmap_size, 1) # as a image format
+        best_score = torch.stack([hm[idx] for hm, idx in zip(heatmap, best_idx)], dim = 0)
+        # print("postprocess best score: {}".format(best_score))
+        # print("postprocess post heatmap shape: {}".format(post_heatmap.shape))
 
         # do not convert to [x0, y0, x1, y1] format
         # boxes = box_ops.box_cxcywh_to_xyxy(out_bboxes)
-        boxes = out_bboxes.cpu()
-        # and from relative [0, 1] to absolute [0, height] coordinates
-        img_h, img_w = target_sizes.unbind(1)
+        bbox_reg_map = outputs['pred_bbox_reg'].cpu()
+        bbox_reg = torch.stack([reg_map[idx] for reg_map, idx in zip(bbox_reg_map, best_idx)], dim = 0)
+        ct_int = torch.stack([best_idx % self.heatmap_size, best_idx // self.heatmap_size], dim = -1)
+        # print("postprocess best idx {}, ct_int: {}, reg: {}".format(best_idx, ct_int, bbox_reg))
+        bbox_ct = (ct_int + bbox_reg) * target_sizes.float() / float(self.heatmap_size)
+        # print("{}, {}".format(target_sizes, self.heatmap_size))
+        # print("postprocess ct: {}".format(bbox_ct))
 
-        #print("post process: img_h, img_w: {}, {}".format(img_h,img_w))
-        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
-        boxes = boxes * scale_fct
+        bbox_wh_map = outputs['pred_bbox_wh'].cpu()
+        bbox_wh = torch.stack([wh_map[idx] for wh_map, idx in zip(bbox_wh_map, best_idx)], dim = 0)
+        # convert from  relative [0, 1] to absolute [0, height] coordinates
+        bbox_wh = bbox_wh * target_sizes
+        # print("postprocess bbox wh: {}".format(bbox_wh))
 
-        results = [{'score': s, 'label': l, 'box': b} for s, l, b in zip(scores, labels, boxes)]
+        results = [{'raw_hm': raw_hm, 'post_hm': raw_hm, 'score': score, 'bbox_ct': ct, 'bbox_wh': wh} for raw_hm, post_hm, score, ct, wh in zip(raw_heatmap, post_heatmap, best_score, bbox_ct, bbox_wh)]
 
+        # print("postprocess time: {}".format(time.time() - start_time))
         return results
 
 
@@ -334,6 +366,8 @@ def build(args):
 
     criterion = SetCriterion(weight_dict=weight_dict)
     criterion.to(device)
-    postprocessors = {'bbox': PostProcess()}
+
+    output_size = (args.search_size + backbone.stride - 1) // backbone.stride
+    postprocessors = {'bbox': PostProcess(output_size, args.window_factor)}
 
     return model, criterion, postprocessors

@@ -105,8 +105,12 @@ def get_args_parser():
 
     parser.add_argument('--model_save_step', default=50, type=int,
                         help='step to save model')
-    parser.add_argument('--benchmark_test_step', default=50, type=int,
+    parser.add_argument('--benchmark_test_step', default=1, type=int,
                         help='step to test benchmark')
+
+    # post process
+    parser.add_argument('--window_factor', default=0.44, type=float,
+                        help='the factor of the hanning window for heatmap post process')
 
     return parser
 
@@ -228,7 +232,6 @@ def main(args):
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
-
 
         # evualute with benchmark
         if utils.is_main_process():

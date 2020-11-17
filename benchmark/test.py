@@ -32,8 +32,8 @@ def get_args_parser():
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
     parser.add_argument('--backbone', default='resnet50', type=str,
                         help="Name of the convolutional backbone to use")
-    parser.add_argument('--dilation', action='store_false',
-                        help="If true, we replace stride with dilation in the last convolutional block (DC5)") #defualt is true
+    parser.add_argument('--resnet_dilation', action='store_false',
+                        help="If true (default), we replace stride with dilation in resnet blocks") #default is true
     parser.add_argument('--return_interm_layers', action='store_true')
     parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
                         help="Type of positional embedding to use on top of the image features")
@@ -54,7 +54,10 @@ def get_args_parser():
     parser.add_argument('--num_queries', default=100, type=int,
                         help="Number of query slots")
     parser.add_argument('--pre_norm', action='store_true')
-    parser.add_argument('--decoder_query', default=16, type=int) # hard-coding, should be obtained from the backbone calculation with the search_size
+    parser.add_argument('--return_layers', default=[], nargs='+')
+    parser.add_argument('--weighted', action='store_true',
+                        help="the weighted for the multiple input embedding for transformer")
+
 
     # * Segmentation
     parser.add_argument('--masks', action='store_true',
@@ -65,12 +68,14 @@ def get_args_parser():
                         help="Disables auxiliary decoding losses (loss at each layer)")
 
     # * Loss coefficients
-    parser.add_argument('--mask_loss_coef', default=1, type=float)
-    parser.add_argument('--dice_loss_coef', default=1, type=float)
-    parser.add_argument('--bbox_loss_coef', default=5, type=float)
-    parser.add_argument('--giou_loss_coef', default=2, type=float)
-    parser.add_argument('--eos_coef', default=1, type=float,
-                        help="Relative classification weight of the no-object class")
+    parser.add_argument('--reg_loss_coef', default=1, type=float,
+                        help="weight (coeffficient) about bbox offset reggresion loss")
+    parser.add_argument('--wh_loss_coef', default=1, type=float,
+                        help="weight (coeffficient) about bbox width/height loss")
+
+    # post process
+    parser.add_argument('--window_factor', default=0.44, type=float,
+                        help='the factor of the hanning window for heatmap post process')
 
     # tracking
     parser.add_argument('--checkpoint', default="", type=str)

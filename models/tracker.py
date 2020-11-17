@@ -13,6 +13,7 @@ import datasets.utils
 from datasets.utils import crop_image, siamfc_like_scale, get_exemplar_size # TODO: move to utils
 from util.box_ops import box_cxcywh_to_xyxy
 import cv2
+import time
 
 class Tracker(object):
     def __init__(self, model, postprocess, search_size):
@@ -22,7 +23,7 @@ class Tracker(object):
 
         self.search_size = search_size
 
-        self.size_lpf = 0.5
+        self.size_lpf = 0.33  # TODO: shift to args, (SiamRPN: 0.33),
 
         self.image_normalize = T.Compose([
             T.ToTensor(), # Converts a numpy.ndarray (H x W x C) in the range [0, 255] to a torch.FloatTensor of shape (C x H x W) in the range [0.0, 1.0]
@@ -96,23 +97,22 @@ class Tracker(object):
                 outputs = self.model(search)
 
         outputs = self.postprocess(outputs, torch.as_tensor(search.shape[-2:]).unsqueeze(0))
+        score = outputs[0]["score"]
 
         # print("outputs: {}".format(outputs))
 
         scale_z = siamfc_like_scale(bbox_xyxy)[1]
 
-        bbox = outputs[0]["box"] / scale_z
-        pos_delta = (outputs[0]["box"][:2] - self.search_size / 2) / scale_z
-
+        ct_delta = (outputs[0]["bbox_ct"] - self.search_size / 2) / scale_z
         # print("scaled back bbox: {}, delta pos: {}, scaked back search size: {}".format(bbox, pos_delta, self.search_size / scale_z))
-
-        # todo smooth:
-        cx = self.center_pos[0] + pos_delta[0].item()
-        cy = self.center_pos[1] + pos_delta[1].item()
+        cx = self.center_pos[0] + ct_delta[0].item()
+        cy = self.center_pos[1] + ct_delta[1].item()
 
         # smooth bbox
-        width = self.size[0] * (1 - self.size_lpf) + bbox[2].item() * self.size_lpf
-        height = self.size[1] * (1 - self.size_lpf) + bbox[3].item() * self.size_lpf
+        lpf = score * self.size_lpf
+        bbox_wh = outputs[0]["bbox_wh"] / scale_z
+        width = self.size[0] * (1 - lpf) + bbox_wh[0].item() * lpf
+        height = self.size[1] * (1 - lpf) + bbox_wh[1].item() * lpf
 
         # clip boundary
         bbox = [cx - width / 2, cy - height / 2,
@@ -124,15 +124,24 @@ class Tracker(object):
         self.size = [bbox[2] - bbox[0], bbox[3] - bbox[1]]
 
         # debug for search image:
-        debug_bbox = box_cxcywh_to_xyxy(torch.round(outputs[0]["box"]).int())
+        start_time = time.time()
+        debug_bbox = box_cxcywh_to_xyxy(torch.round(torch.cat([outputs[0]["bbox_ct"], outputs[0]["bbox_wh"]])).int())
         rec_search_image = cv2.rectangle(search_image,
                                          (debug_bbox[0], debug_bbox[1]),
                                          (debug_bbox[2], debug_bbox[3]),(0,255,0),3)
 
+        raw_heatmap = (torch.round(outputs[0]["raw_hm"] * 255)).detach().numpy().astype(np.uint8)
+        post_heatmap = (torch.round(outputs[0]["post_hm"] * 255)).detach().numpy().astype(np.uint8)
+        heatmap_resize = cv2.resize(raw_heatmap, search_image.shape[1::-1])
+        heatmap_color = np.stack([heatmap_resize, np.zeros(search_image.shape[1::-1], dtype=np.uint8), heatmap_resize], -1)
+        rec_search_image = np.round(0.4 * heatmap_color + 0.6 * rec_search_image.copy()).astype(np.uint8)
+        # print("after postprocess time: {}".format(time.time() - start_time))
+
         return {
             'bbox': bbox,
-            'label': outputs[0]["label"],
-            'score': outputs[0]["score"],
+            'score': score,
+            'raw_heatmap': raw_heatmap,
+            'post_heatmap': post_heatmap,
             'search_image': rec_search_image, # debug
             'template_image': self.rect_template_image # debug
                }

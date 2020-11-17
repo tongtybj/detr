@@ -110,12 +110,18 @@ class Backbone(BackboneBase):
             pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d)
         super().__init__(name, backbone, train_backbone, return_layers)
 
+        self.stride = 4
+        for d in dilation:
+            if not d:
+                self.stride = self.stride * 2
+
 
 class Joiner(nn.Sequential):
     def __init__(self, backbone, position_embedding):
         super().__init__(backbone, position_embedding)
 
         self.num_channels_list = []
+        self.stride = backbone.stride
 
     def forward(self, tensor_list: NestedTensor):
 
