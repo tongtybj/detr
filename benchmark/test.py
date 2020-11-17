@@ -124,6 +124,12 @@ def main(args, tracker):
             lost_number = 0
             toc = 0
             pred_bboxes = []
+
+            template_image = None
+            search_image = None
+            raw_heatmap = None
+            post_heatmap = None
+
             for idx, (img, gt_bbox) in enumerate(video):
                 if len(gt_bbox) == 4:
                     gt_bbox = [gt_bbox[0], gt_bbox[1],
@@ -143,6 +149,11 @@ def main(args, tracker):
                     pred_bbox = [pred_bbox[0], pred_bbox[1],
                                  pred_bbox[2] - pred_bbox[0],
                                  pred_bbox[3] - pred_bbox[1]]
+
+                    template_image = outputs['template_image']
+                    search_image = outputs['search_image']
+                    raw_heatmap = outputs['raw_heatmap']
+                    post_heatmap = outputs['post_heatmap']
 
                     overlap = vot_overlap(pred_bbox, gt_bbox, (img.shape[1], img.shape[0]))
                     if overlap > 0:
@@ -168,7 +179,18 @@ def main(args, tracker):
                     cv2.putText(img, str(idx), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
                     cv2.putText(img, str(lost_number), (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                     cv2.imshow(video.name, img)
-                    cv2.waitKey(1)
+
+                    if args.debug_vis:
+
+                        cv2.imshow("template", template_image)
+                        cv2.imshow("search_raw", search_image)
+                        cv2.imshow("raw_heatmap", raw_heatmap)
+                        cv2.imshow("post_heatmap", post_heatmap)
+                        k = cv2.waitKey(0)
+                        if k == 27:         # wait for ESC key to exit
+                            sys.exit()
+                    else:
+                        cv2.waitKey(1)
                 elif not args.vis:
                     sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
 
