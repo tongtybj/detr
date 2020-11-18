@@ -76,11 +76,11 @@ def get_args_parser():
     parser.add_argument('--context_amount', default=0.5, type=float)
 
     # * hyper-parameter for tracking
-    parser.add_argument('--score_threshold', default=0.1, type=float,
+    parser.add_argument('--score_threshold', default=0.05, type=float,
                         help='the lower score threshold to recognize a target (score_target > threshold) ')
     parser.add_argument('--window_steps', default=3, type=int,
                         help='the pyramid factor to gradually reduce the widow effect')
-    parser.add_argument('--window_factor', default=0.44, type=float,
+    parser.add_argument('--window_factor', default=0.6, type=float,
                         help='the factor of the hanning window for heatmap post process')
     parser.add_argument('--tracking_size_penalty_k', default=0.04, type=float,
                         help='the factor to penalize the change of size')
