@@ -120,7 +120,7 @@ class Tracker(object):
         assert heatmap.size(0) == self.heatmap_size * self.heatmap_size
         raw_heatmap = heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format
         # print("postprocess raw heatmap shape: {}".format(raw_heatmap.shape))
-
+        
         if torch.max(heatmap) > self.score_threshold:
 
 
@@ -139,7 +139,6 @@ class Tracker(object):
             penalty = torch.exp(-(r_c * s_c - 1) * self.size_penalty_k)
 
             best_idx = 0
-            best_score = 0
             window_factor = self.window_factor
             post_heatmap = None
             for i in range(self.window_steps):
@@ -203,7 +202,7 @@ class Tracker(object):
         else:
             bbox = [self.center_pos[0] - self.size[0] / 2, self.center_pos[1] - self.size[1] / 2,
                     self.center_pos[0] + self.size[0] / 2, self.center_pos[1] + self.size[1] / 2]
-
+            best_score = self.score_threshold
             post_heatmap = raw_heatmap
             rec_search_image = search_image
 
