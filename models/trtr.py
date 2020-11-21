@@ -206,18 +206,23 @@ class SetCriterion(nn.Module):
         all_target_boxes_wh = torch.stack([t['wh'] for t in targets]) # [bn, 2]
         all_target_boxes_ind = torch.as_tensor([t['ind'].item() for t in targets], device = all_src_boxes_reg.device) # [bn]
 
-        #print("all_target_boxes_reg: {}, all_src_boxes_reg: {}".format(all_target_boxes_reg.shape, all_src_boxes_reg.shape))
-        #print("all_target_boxes_wh: {}, all_src_boxes_wh: {}".format(all_target_boxes_wh.shape, all_src_boxes_wh.shape))
-        #print("all_target_boxes_ind: {}".format(all_target_boxes_ind.shape))
+        # print("all_target_boxes_reg: {}, all_src_boxes_reg: {}".format(all_target_boxes_reg.shape, all_src_boxes_reg.shape))
+        # print("all_target_boxes_wh: {}, all_src_boxes_wh: {}".format(all_target_boxes_wh.shape, all_src_boxes_wh.shape))
+        # print("all_target_boxes_ind: {}".format(all_target_boxes_ind))
 
 
-        # TODO: reservation for only calculate the loss for bbox has the object
+        # only calculate the loss for bbox has the object
         mask = [id for id, t in enumerate(targets) if t['valid'].item() == 1] # only extract the index with object
         src_boxes_reg = all_src_boxes_reg[mask]
         target_boxes_reg = all_target_boxes_reg[mask]
         src_boxes_wh = all_src_boxes_wh[mask]
         target_boxes_wh = all_target_boxes_wh[mask]
         target_boxes_ind = all_target_boxes_ind[mask]
+
+        # print("mask: {}".format(mask))
+        # print("target_boxes_reg: {}, src_boxes_reg: {}".format(target_boxes_reg.shape, src_boxes_reg.shape))
+        # print("target_boxes_wh: {}, src_boxes_wh: {}".format(target_boxes_wh.shape, src_boxes_wh.shape))
+        # print("target_boxes_ind: {}".format(target_boxes_ind))
 
         #loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
         loss_bbox_reg = reg_l1_loss(src_boxes_reg, target_boxes_ind, target_boxes_reg)
@@ -258,7 +263,6 @@ class SetCriterion(nn.Module):
                     l_dict = loss(aux_outputs, targets, num_boxes)
                     l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
                     losses.update(l_dict)
-
 
         return losses
 

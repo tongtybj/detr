@@ -85,7 +85,7 @@ def get_args_parser():
     parser.add_argument('--search_aug_color', default=1.0, type=float)  # Pysot is 1.0
     parser.add_argument('--exempler_size', default=127, type=int)
     parser.add_argument('--search_size', default=255, type=int)
-    parser.add_argument('--negative_aug_rate', default=0.8, type=float)
+    parser.add_argument('--negative_aug_rate', default=0.2, type=float)
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')

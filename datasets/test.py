@@ -41,7 +41,7 @@ def get_args_parser():
     parser.add_argument('--search_size', default=255, type=int)
     parser.add_argument('--resnet_dilation', action='store_false',
                         help="If true, we replace stride with dilation in the last convolutional block (DC5)") #defualt is true
-    parser.add_argument('--negative_aug_rate', default=0.8, type=float)
+    parser.add_argument('--negative_aug_rate', default=0.2, type=float)
 
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')

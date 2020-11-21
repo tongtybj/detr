@@ -498,7 +498,7 @@ def reg_l1_loss(output, ind, target):
     return loss
 
 def neg_loss(pred, gt):
-  ''' FocalLoss for heatmap (copy from CenterNet).
+  ''' FocalLoss for heatmap (copy from CenterNet => calculate the mean).
     Arguments:
       pred (batch x c x h x w)
       gt (batch x c x h x w)
@@ -515,14 +515,15 @@ def neg_loss(pred, gt):
 
   num_pos  = pos_inds.float().sum()
 
-  # TODO: please remove this debug code:
-  assert num_pos == gt.shape[0]
-
   pos_loss = pos_loss.sum()
   neg_loss = neg_loss.sum()
 
+  """
   if num_pos == 0:
     loss = loss - neg_loss
   else:
     loss = loss - (pos_loss + neg_loss) / num_pos
+  """
+
+  loss = loss - (pos_loss + neg_loss) / gt.size(0) # calculate the mean for all sample, regardless positive or negative sample
   return loss

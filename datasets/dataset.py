@@ -298,8 +298,9 @@ class TrkDataset(Dataset):
 
         # gray = cfg.DATASET.GRAY and cfg.DATASET.GRAY > np.random.random()
 
-        # get one dataset
-        neg = 0 # TODO: get a negative sample to improve the performance of heatmap like Dasiamese RPN
+        # negative sample
+        neg = self.negative_rate and self.negative_rate > np.random.random()
+
         if neg:
             template = dataset.get_random_target(index)
             search = np.random.choice(self.all_dataset).get_random_target()
@@ -329,20 +330,20 @@ class TrkDataset(Dataset):
         hm = np.zeros((self.output_size, self.output_size), dtype=np.float32)
 
 
-
+        valid = not neg
         scale = float(self.output_size) / float(self.search_size)
         output_bbox = [input_bbox.x1 * scale, input_bbox.y1 * scale, input_bbox.x2 * scale, input_bbox.y2 * scale]
         radius = gaussian_radius((math.ceil(output_bbox[3] - output_bbox[1]), math.ceil(output_bbox[2] - output_bbox[0])))
         radius = max(0, int(radius))
         ct = np.array([(output_bbox[0] + output_bbox[2]) / 2, (output_bbox[1] + output_bbox[3]) / 2], dtype=np.float32)
-        ct_int = ct.astype(np.int32) # TODO: try to use np.around, which gives a different range of reg with (-0.5, 0.5)
+        ct_int = ct.astype(np.int32)
         reg = torch.tensor(ct - ct_int, dtype=torch.float32) # range is [0, 1)
         wh = torch.tensor([input_bbox[2] - input_bbox[0], input_bbox[3] - input_bbox[1]], dtype=torch.float32) / float(self.search_size) # normalized
         ind = ct_int[1] * self.output_size + ct_int[0]
-        draw_umich_gaussian(hm, ct_int, radius)
+        if valid:
+            draw_umich_gaussian(hm, ct_int, radius)
         hm = torch.tensor(hm, dtype=torch.float32) # range is [0, 1)
 
-        valid = not neg # TODO: reservation for the nagative sample, like DasiamRPN
 
         # print("index: {}, gaussian radius: {}, ct: {}, reg: {}, wh: {}, valid: {}".format(index, radius, ct, reg, wh, valid)) # debug
 
