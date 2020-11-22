@@ -145,7 +145,7 @@ class Tracker(object):
                 # add distance penalty
                 post_heatmap = penalty * heatmap * (1 -  window_factor) + self.window * window_factor
                 best_idx = torch.argmax(post_heatmap)
-                best_score = heatmap[best_idx]
+                best_score = heatmap[best_idx].item()
 
                 if best_score > self.score_threshold:
                     break;
