@@ -170,7 +170,7 @@ class TrkDataset(Dataset):
                  image_set, dataset_paths,
                  dataset_video_frame_ranges, dataset_num_uses,
                  template_shift, template_scale, template_color,
-                 search_shift, search_scale, search_color,
+                 search_shift, search_scale, search_blur, search_color,
                  exempler_size = 127, search_size = 255,
                  negative_rate = 0.5,
                  resnet_dilation = []):
@@ -234,7 +234,7 @@ class TrkDataset(Dataset):
         self.search_aug = Augmentation(
             search_shift,
             search_scale,
-            0,
+            search_blur,
             0,
             search_color)
 
@@ -374,7 +374,7 @@ def build(image_set, args):
     dataset = TrkDataset(image_set, args.dataset_paths,
                          args.dataset_video_frame_ranges, args.dataset_num_uses,
                          args.template_aug_shift, args.template_aug_scale, args.template_aug_color,
-                         args.search_aug_shift, args.search_aug_scale, args.search_aug_color,
+                         args.search_aug_shift, args.search_aug_scale, args.search_aug_blur, args.search_aug_color,
                          args.exempler_size, args.search_size,
                          args.negative_aug_rate,
                          args.resnet_dilation)

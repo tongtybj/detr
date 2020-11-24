@@ -82,6 +82,7 @@ def get_args_parser():
     parser.add_argument('--template_aug_color', default=1.0, type=float) # Pysot is 1.0
     parser.add_argument('--search_aug_shift', default=64, type=int)
     parser.add_argument('--search_aug_scale', default=0.18, type=float)
+    parser.add_argument('--search_aug_blur', default=0.2, type=float)  # Pysot is 0.2
     parser.add_argument('--search_aug_color', default=1.0, type=float)  # Pysot is 1.0
     parser.add_argument('--exempler_size', default=127, type=int)
     parser.add_argument('--search_size', default=255, type=int)
