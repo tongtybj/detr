@@ -6,7 +6,7 @@ Large Scale Visual Recognition Challenge 2015 (ILSVRC2015)
 ````shell
 wget http://bvisionweb1.cs.unc.edu/ilsvrc2015/ILSVRC2015_VID.tar.gz
 tar -xzvf ./ILSVRC2015_VID.tar.gz
-ln -sfb $PWD/ILSVRC2015_./ # important
+ln -sfb $PWD/ILSVRC2015 ./ # important
 ````
 
 ### Crop & Generate data info (20 min)
