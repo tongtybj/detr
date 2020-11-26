@@ -2,7 +2,7 @@
 
 #--userns=host: https://dockerlabs.collabnix.com/advanced/security/userns/
 
-docker run --name detr-train \
+docker run --name trtr-train \
        --gpus all \
        --mount type=bind,src=${2:-~/detr},dst=/root/detr \
        --mount type=bind,src=${1:-~}/datasets,dst=/root/datasets \
@@ -10,4 +10,4 @@ docker run --name detr-train \
        -it --privileged \
        --network=host \
        --userns=host \
-       detr
+       trtr
