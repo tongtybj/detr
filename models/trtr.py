@@ -2,6 +2,7 @@
 """
 DETR model and criterion classes.
 """
+import copy
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -27,23 +28,28 @@ class TRTR(nn.Module):
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
-        self.transformer = transformer
+        self.transformer = nn.ModuleList([copy.deepcopy(transformer) for i in backbone.num_channels_list]) # multiple for layer-wise backbone output
 
         hidden_dim = transformer.d_model
 
-        # heatmap
+        # heatmap % bbox
         # TODO: try to use MLP or Conv2d_3x3 before fully-connected like CenterNet
-        self.heatmap_embed = nn.Linear(hidden_dim, 1)
-        self.heatmap_embed.bias.data.fill_(-2.19)
+        self.reg_embed = nn.ModuleList([MLP(hidden_dim, hidden_dim, 2, 3) for i in backbone.num_channels_list])
+        self.wh_embed = nn.ModuleList([MLP(hidden_dim, hidden_dim, 2, 3) for i in backbone.num_channels_list])
+        self.heatmap_embed = nn.ModuleList([nn.Linear(hidden_dim, 1) for i in backbone.num_channels_list])
+        for embed in self.heatmap_embed:
+            embed.bias.data.fill_(-2.19)
 
-        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
+        for embed in self.heatmap_embed:
+            print(embed.bias.data)
 
-        self.input_projs = nn.ModuleList(nn.Conv2d(num_channels, hidden_dim, kernel_size=1) for num_channels in backbone.num_channels_list)
+        self.input_projs = nn.ModuleList([nn.Conv2d(num_channels, hidden_dim, kernel_size=1) for num_channels in backbone.num_channels_list])
 
         self.weighted = weighted
         if self.weighted:
             self.hm_weight = nn.Parameter(torch.ones(len(backbone.num_channels_list)))
-            self.bbox_weight = nn.Parameter(torch.ones(len(backbone.num_channels_list)))
+            self.reg_weight = nn.Parameter(torch.ones(len(backbone.num_channels_list)))
+            self.wh_weight = nn.Parameter(torch.ones(len(backbone.num_channels_list)))
 
         self.backbone = backbone
         self.aux_loss = aux_loss
@@ -119,20 +125,21 @@ class TRTR(nn.Module):
             search_src_projs.append(input_proj(search_feature.tensors))
 
 
-        hs_list = []
-        for i, (template_src_proj, search_src_proj) in enumerate(zip(self.template_src_projs, search_src_projs)):
+        hm_list = []
+        reg_list = []
+        wh_list = []
+        for i, (template_src_proj, search_src_proj, transformer, reg_embed, wh_embed, heatmap_embed) in enumerate(zip(self.template_src_projs, search_src_projs, self.transformer, self.reg_embed, self.wh_embed, self.heatmap_embed)):
             if template_samples is not None:
-                hs, memory = self.transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1])
+                hs, memory = transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1])
                 self.memory.append(memory)
             else:
-                hs = self.transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1], self.memory[i])[0]
+                hs = transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1], self.memory[i])[0]
 
-            hs_list.append(hs)
+            reg_list.append(reg_embed(hs))
+            wh_list.append(wh_embed(hs))
+            hm_list.append(heatmap_embed(hs))
 
 
-        # sum
-        hs_hm = None
-        hs_bbox = None
 
         def avg(lst):
             return sum(lst) / len(lst)
@@ -144,22 +151,21 @@ class TRTR(nn.Module):
             return s
 
         if self.weighted:
-            cls_weight = F.softmax(self.cls_weight, 0)
-            loc_weight = F.softmax(self.loc_weight, 0)
-            hs_hm, hs_bbox =  weighted_avg(hs_list, cls_weight), weighted_avg(hs_list, loc_weight)
-            raise # debug
+            reg_weight = F.softmax(self.reg_weight, 0)
+            wh_weight = F.softmax(self.wh_weight, 0)
+            hm_weight = F.softmax(self.hm_weight, 0)
+            hs_hm, hs_reg, hs_wh =  weighted_avg(hm_list, hm_weight), weighted_avg(reg_list, reg_weight), weighted_avg(wh_list, wh_weight)
         else:
-            hs_hm, hs_bbox =  avg(hs_list), avg(hs_list)
+            hs_hm, hs_reg, hs_wh =  avg(hm_list), avg(reg_list), avg(wh_list)
 
-        outputs_heatmap = self.heatmap_embed(hs_hm) # we have different sigmoid process for training and inference, so we do not get sigmoid here.
-        # print("size of outputs_heatmap: {}, ".format(outputs_heatmap.shape))
 
-        outputs_bbox = self.bbox_embed(hs_bbox).sigmoid()
+        outputs_heatmap = hs_hm  # we have different sigmoid process for training and inference, so we do not get sigmoid here.
+
         # TODO: whether can you sigmoid() for the offset regression,
         # YoLo V3 uses sigmoid: https://blog.paperspace.com/how-to-implement-a-yolo-object-detector-in-pytorch/
-        outputs_bbox_reg = outputs_bbox.split(2,-1)[0]
-        outputs_bbox_wh = outputs_bbox.split(2,-1)[1]
-        # print("size of outputs_bbox_reg: {}, outputs_bbox_wh: {}".format(outputs_bbox_reg.shape, outputs_bbox_wh.shape))
+        outputs_bbox_reg = hs_reg.sigmoid()
+        outputs_bbox_wh = hs_wh.sigmoid()
+
 
         search_mask = search_features[-1].mask.flatten(1).unsqueeze(-1) # [bn, output_hegiht *  output_width, 1]
 
