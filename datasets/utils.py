@@ -9,6 +9,9 @@ INSTANCE_SIZE = 511
 EXEMPLAR_SIZE = 127
 CONTEXT_AMOUNT= 0.5
 
+def get_instance_size():
+    return INSTANCE_SIZE
+
 def get_exemplar_size():
     return EXEMPLAR_SIZE
 

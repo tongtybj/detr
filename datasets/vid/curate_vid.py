@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 sys.path.append('..')
 import utils
 
+debug = False
 
 VID_base_path = "./ILSVRC2015"
 save_base_path = join(VID_base_path, 'Curation')
@@ -60,6 +61,9 @@ def image_curation(num_threads=24):
         sub_set_base_path = join(ann_base_path, subdir)
 
         videos = sorted(listdir(sub_set_base_path))
+
+        if debug:
+          videos = videos[:1]
         n_videos = len(videos)
 
         with futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
@@ -72,6 +76,8 @@ def image_curation(num_threads=24):
 
 def save_config():
     snippets = dict()
+
+    instance_size = utils.get_instance_size()
 
     for subdir, sub_set  in subdir_map.items():
         subdir_base_path = join(ann_base_path, subdir)
@@ -102,6 +108,24 @@ def save_config():
                     o['c'] = name
                     o['bbox'] = [int(bndbox.find('xmin').text), int(bndbox.find('ymin').text),
                                  int(bndbox.find('xmax').text), int(bndbox.find('ymax').text)]
+
+                    s_z, scale_z = utils.siamfc_like_scale(o['bbox'])
+                    s_x = instance_size / scale_z
+                    #print("{}, {}, {}, s_x: {}".format(video, xml, trackid, s_x))
+                    bb_center = [(o['bbox'][2]+o['bbox'][0])/2., (o['bbox'][3]+o['bbox'][1])/2.]
+
+                    mask = [0, 0, instance_size-1, instance_size-1]
+                    if bb_center[0] < s_x/2:
+                      mask[0] = (s_x/2 - bb_center[0]) * scale_z
+                    if bb_center[1] < s_x/2:
+                      mask[1] = (s_x/2 - bb_center[1]) * scale_z
+                    if bb_center[0] + s_x/2 > frame_sz[0]:
+                      mask[2] = mask[2] - (bb_center[0] + s_x/2 - frame_sz[0]) * scale_z
+                    if bb_center[1] + s_x/2 > frame_sz[1]:
+                      mask[3] = mask[3] - (bb_center[1] + s_x/2 - frame_sz[1]) * scale_z
+
+                    o['mask'] = mask
+
                     o['trackid'] = trackid
                     o['occ'] = occluded
                     objs.append(o)
@@ -118,10 +142,11 @@ def save_config():
 
             if len(id_set) > 0:
                 snippets[join(sub_set, video)] = dict()
+                snippets[join(sub_set, video)]['frame_size'] = frames[0]['frame_sz']
+                snippets[join(sub_set, video)]['tracks'] = dict()
 
             for selected in id_set:
                 frame_ids = sorted(id_frames[selected])
-                # check the following  behavior by np.split(np.array([0,2,3,5]), np.array(np.where(np.diff(np.array([0,2,3,5]))> 1)[0]) + 1)
                 sequences = np.split(frame_ids, np.array(np.where(np.diff(frame_ids) > 1)[0]) + 1)
                 sequences = [s for s in sequences if len(s) > 1]  # remove isolated frame.
                 for seq in sequences:
@@ -133,14 +158,17 @@ def save_config():
                                 o = obj
                                 continue
                         snippet[frame['img_path'].split('.')[0]] = o['bbox']
-                    snippets[join(sub_set, video)]['{:02d}'.format(selected)] = snippet
+                    snippets[join(sub_set, video)]['tracks']['{:02d}'.format(selected)] = snippet
+
+            if debug:
+              break
 
     train = {k:v for (k,v) in snippets.items() if 'train' in k}
     val = {k:v for (k,v) in snippets.items() if 'val' in k}
 
 
-    #json.dump(train, open(join(save_base_path,'train.json'), 'w'), indent=4, sort_keys=True)
-    #json.dump(val, open(join(save_base_path,'val.json'), 'w'), indent=4, sort_keys=True)
+    json.dump(train, open(join(save_base_path,'train.json'), 'w'), indent=4, sort_keys=True)
+    json.dump(val, open(join(save_base_path,'val.json'), 'w'), indent=4, sort_keys=True)
 
     with open(join(save_base_path, 'train.pickle'), 'wb') as f:
         pickle.dump(train, f)

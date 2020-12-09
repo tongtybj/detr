@@ -110,7 +110,7 @@ class Augmentation:
         image = cv2.cvtColor(grayed, cv2.COLOR_GRAY2BGR)
         return image
 
-    def _shift_scale_aug(self, image, bbox, crop_bbox, size):
+    def _shift_scale_aug(self, image, bbox, mask, crop_bbox, size):
         im_h, im_w = image.shape[:2]
 
         # adjust crop bounding box
@@ -138,26 +138,47 @@ class Augmentation:
 
             crop_bbox = Corner(x1 + sx, y1 + sy, x2 + sx, y2 + sy)
 
-        # adjust target bounding box
+        # adjust target bounding box and mask
         x1, y1 = crop_bbox.x1, crop_bbox.y1
         bbox = Corner(bbox.x1 - x1, bbox.y1 - y1,
                       bbox.x2 - x1, bbox.y2 - y1)
+        mask = [mask[0] - x1, mask[1] - y1,
+                mask[2] - x1, mask[3] - y1]
+
+        # print("shift aug search_box: {}, search_mask: {}, x1: {}, y1] {}".format(bbox, mask, x1, y1))
+
 
         if self.scale:
             bbox = Corner(bbox.x1 / scale_x, bbox.y1 / scale_y,
                           bbox.x2 / scale_x, bbox.y2 / scale_y)
+            mask = [mask[0] / scale_x, mask[1] / scale_y,
+                    mask[2] / scale_x, mask[3] / scale_y]
+
+        if mask[0] < 0:
+            mask[0] = 0.0
+        if mask[1] < 0:
+            mask[1] = 0.0
+        if mask[2] > size:
+            mask[2] = float(size)
+        if mask[3] > size:
+            mask[3] = float(size)
+
+        # print("scale aug search_box: {}, search_mask: {}".format(bbox, mask))
 
         image = self._crop_roi(image, crop_bbox, size)
-        return image, bbox
+        return image, bbox, mask
 
-    def _flip_aug(self, image, bbox):
+    def _flip_aug(self, image, bbox, mask):
         image = cv2.flip(image, 1)
         width = image.shape[1]
         bbox = Corner(width - 1 - bbox.x2, bbox.y1,
                       width - 1 - bbox.x1, bbox.y2)
-        return image, bbox
+        bbox = Corner(width - 1 - mask[2], mask[1],
+                      width - 1 - mask[0], mask[3])
 
-    def __call__(self, image, bbox, size, gray=False):
+        return image, bbox, mask
+
+    def __call__(self, image, bbox, mask, size, gray=False):
         shape = image.shape
         crop_bbox = center2corner(Center(shape[0]//2, shape[1]//2,
                                          size-1, size-1))
@@ -166,7 +187,7 @@ class Augmentation:
             image = self._gray_aug(image)
 
         # shift scale augmentation
-        image, bbox = self._shift_scale_aug(image, bbox, crop_bbox, size)
+        image, bbox, mask = self._shift_scale_aug(image, bbox, mask, crop_bbox, size)
 
         # color augmentation
         if self.color > np.random.random():
@@ -178,6 +199,6 @@ class Augmentation:
 
         # flip augmentation
         if self.flip and self.flip > np.random.random():
-            image, bbox = self._flip_aug(image, bbox)
+            image, bbox, mask = self._flip_aug(image, bbox, mask)
 
-        return image, bbox
+        return image, bbox, mask

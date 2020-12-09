@@ -19,7 +19,7 @@ import numpy as np
 
 class TRTR(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbone, transformer, aux_loss=False, weighted=False):
+    def __init__(self, backbone, transformer, aux_loss=False, weighted=False, transformer_mask=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -53,6 +53,8 @@ class TRTR(nn.Module):
         self.template_pos = None
         self.memory = []
 
+        self.transformer_mask = transformer_mask
+
     def forward(self, search_samples: NestedTensor, template_samples: NestedTensor = None):
         """ template_samples is a NestedTensor for template image:
                - samples.tensor: batched images, of shape [batch_size x 3 x H_template x W_template]
@@ -74,11 +76,9 @@ class TRTR(nn.Module):
                                 dictionnaries containing the two above keys for each decoder layer.
         """
 
-        if isinstance(template_samples, (torch.Tensor)):
-            template_samples = nested_tensor_from_tensor_list(template_samples)
-
-        if isinstance(search_samples, (torch.Tensor)):
-            search_samples = nested_tensor_from_tensor_list(search_samples)
+        if template_samples is not None:
+            assert isinstance(template_samples, NestedTensor)
+        assert isinstance(search_samples, NestedTensor)
 
 
         template_features = None
@@ -86,20 +86,27 @@ class TRTR(nn.Module):
         if template_samples is not None:
             template_features, self.template_pos  = self.backbone(template_samples)
 
-            self.template_mask = template_features[-1].mask
+            self.template_mask = None
+            if self.transformer_mask:
+                self.template_mask = template_features[-1].mask
+
+
             self.template_src_projs = []
             for input_proj, template_feature in zip(self.input_projs, template_features):
                 self.template_src_projs.append(input_proj(template_feature.tensors))
 
             self.memory = []
+            # print("backbone template mask: {}".format(self.template_mask))
 
         start = time.time()
         search_features, search_pos  = self.backbone(search_samples)
         # print("search image feature extraction: {}".format(time.time() - start))
-        search_mask = search_features[-1].mask
+        search_mask = None
+        if self.transformer_mask:
+            search_mask = search_features[-1].mask
 
-        assert search_mask is not None
-        assert self.template_mask is not None
+        #torch.set_printoptions(profile="full")
+        #print("backbone search mask: {}".format(search_mask))
 
         search_src_projs = []
         for input_proj, search_feature in zip(self.input_projs, search_features):
@@ -148,25 +155,26 @@ class TRTR(nn.Module):
         outputs_bbox_wh = outputs_bbox.split(2,-1)[1]
         # print("size of outputs_bbox_reg: {}, outputs_bbox_wh: {}".format(outputs_bbox_reg.shape, outputs_bbox_wh.shape))
 
+        search_mask = search_features[-1].mask.flatten(1).unsqueeze(-1) # [bn, output_hegiht *  output_width, 1]
 
-        out = {'pred_heatmap': outputs_heatmap[-1], 'pred_bbox_reg': outputs_bbox_reg[-1], 'pred_bbox_wh': outputs_bbox_wh[-1]}
+        out = {'pred_heatmap': outputs_heatmap[-1], 'pred_bbox_reg': outputs_bbox_reg[-1], 'pred_bbox_wh': outputs_bbox_wh[-1], 'search_mask': search_mask}
         if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_heatmap, outputs_bbox_reg, outputs_bbox_wh)
+            out['aux_outputs'] = self._set_aux_loss(outputs_heatmap, outputs_bbox_reg, outputs_bbox_wh, search_mask)
         return out
 
     @torch.jit.unused
-    def _set_aux_loss(self, outputs_class, outputs_bbox_reg, outputs_bbox_wh):
+    def _set_aux_loss(self, outputs_class, outputs_bbox_reg, outputs_bbox_wh, search_mask):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
-        return [{'pred_heatmap': a, 'pred_bbox_reg': b, 'pred_bbox_wh': c}
+        return [{'pred_heatmap': a, 'pred_bbox_reg': b, 'pred_bbox_wh': c, 'search_mask': search_mask}
                 for a, b, c  in zip(outputs_class[:-1], outputs_bbox_reg[:-1], outputs_bbox_wh[:-1])]
 
 
 class SetCriterion(nn.Module):
     """ This class computes the loss for TRTR.
     """
-    def __init__(self, weight_dict):
+    def __init__(self, weight_dict, loss_mask=False):
         """ Create the criterion.
         Parameters:
             weight_dict: dict containing as key the names of the losses and as values their relative weight.
@@ -175,17 +183,23 @@ class SetCriterion(nn.Module):
         super().__init__()
         self.weight_dict = weight_dict
         self.losses = [self.loss_heatmap, self.loss_bbox] # workaround for heatmap based boundbox
+        self.loss_mask = loss_mask
 
     def loss_heatmap(self, outputs, targets, num_boxes):
         """ Focal loss for the heatmap
         targets dicts must contain the key "heatmap" containing a tensor of dim [batch_size]
         """
-        assert 'pred_heatmap' in outputs
+        assert 'pred_heatmap' in outputs and 'search_mask' in outputs
         src_heatmap = torch.clamp(outputs['pred_heatmap'].sigmoid(), min=1e-4, max=1-1e-4) # [bN, output_height *  output_width, 1], clamp for focal loss
         target_heatmap = torch.stack([t['hm'] for t in targets]) # [bn, output_hegiht, output_width]
         target_heatmap = target_heatmap.flatten(1).unsqueeze(-1)  # [bn, output_hegiht *  output_width, 1]
 
-        loss_hm = neg_loss(src_heatmap, target_heatmap)
+        if self.loss_mask:
+            mask = torch.logical_not(outputs['search_mask'])
+        else:
+            mask = None
+
+        loss_hm = neg_loss(src_heatmap, target_heatmap, mask)
 
         losses = {'loss_hm': loss_hm}
 
@@ -280,6 +294,8 @@ class PostProcess(nn.Module):
 
         # do post sigmoid process
         heatmap = outputs['pred_heatmap'].sigmoid().squeeze(-1)
+        # mask the heatmap
+        heatmap.masked_fill_(outputs['search_mask'].squeeze(-1), 0.0) # TODO check the validity
 
         out = {'pred_heatmap': heatmap, 'pred_bbox_reg': outputs['pred_bbox_reg'], 'pred_bbox_wh': outputs['pred_bbox_wh']}
 
@@ -311,7 +327,8 @@ def build(args):
         backbone,
         transformer,
         aux_loss=args.aux_loss,
-        weighted = args.weighted
+        weighted = args.weighted,
+        transformer_mask = args.transformer_mask,
     )
 
     weight_dict = {'loss_hm': 1, 'loss_bbox_reg': args.reg_loss_coef, 'loss_bbox_wh': args.wh_loss_coef}
@@ -322,7 +339,7 @@ def build(args):
             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
         weight_dict.update(aux_weight_dict)
 
-    criterion = SetCriterion(weight_dict=weight_dict)
+    criterion = SetCriterion(weight_dict=weight_dict, loss_mask = args.loss_mask)
     criterion.to(device)
 
     postprocessors = {'bbox': PostProcess()}

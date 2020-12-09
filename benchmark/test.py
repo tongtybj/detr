@@ -57,10 +57,16 @@ def get_args_parser():
     parser.add_argument('--return_layers', default=[], nargs='+')
     parser.add_argument('--weighted', action='store_true',
                         help="the weighted for the multiple input embedding for transformer")
+    parser.add_argument('--transformer_mask', action='store_true',
+                        help="mask for transformer")
+
 
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
                         help="Disables auxiliary decoding losses (loss at each layer)")
+    parser.add_argument('--loss_mask', action='store_true',
+                        help="mask for heamtmap loss")
+
 
     # * Loss coefficients
     parser.add_argument('--reg_loss_coef', default=1, type=float,

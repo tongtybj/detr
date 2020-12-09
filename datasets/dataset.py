@@ -64,19 +64,19 @@ class SubDataset(object):
             raise TypeError("can not load module {}, currently can only support json and pickle".format(ext))
 
         for video in list(meta_data.keys()):
-            for track in meta_data[video]:
-                frames = meta_data[video][track]
+            for track in meta_data[video]["tracks"]:
+                frames = meta_data[video]["tracks"][track]
                 # print("frames for {}: {}".format(video, frames.keys()))
                 frames = list(map(int,
                               filter(lambda x: x.isdigit(), frames.keys())))
                 frames.sort()
-                meta_data[video][track]['frames'] = frames
+                meta_data[video]["tracks"][track]['frames'] = frames
                 if len(frames) <= 0:
                     logger.warning("{}/{} has no frames".format(video, track))
-                    del meta_data[video][track]
+                    del meta_data[video]["tracks"][track]
 
         for video in list(meta_data.keys()):
-            if len(meta_data[video]) <= 0:
+            if len(meta_data[video]["tracks"]) <= 0:
                 logger.warning("{} has no tracks".format(video))
                 del meta_data[video]
 
@@ -93,7 +93,9 @@ class SubDataset(object):
         meta_data_new = {}
         for video, tracks in meta_data.items():
             new_tracks = {}
-            for trk, frames in tracks.items():
+            new_tracks['frame_size'] = tracks['frame_size']
+            new_tracks['tracks'] = {}
+            for trk, frames in tracks['tracks'].items():
                 new_frames = {}
                 for frm, bbox in frames.items():
                     if not isinstance(bbox, dict):
@@ -106,8 +108,8 @@ class SubDataset(object):
                             continue
                     new_frames[frm] = bbox
                 if len(new_frames) > 0:
-                    new_tracks[trk] = new_frames
-            if len(new_tracks) > 0:
+                    new_tracks['tracks'][trk] = new_frames
+            if len(new_tracks['tracks']) > 0:
                 meta_data_new[video] = new_tracks
         return meta_data_new
 
@@ -131,14 +133,15 @@ class SubDataset(object):
         frame = "{:06d}".format(frame)
         image_path = os.path.join(self.path, video,
                                   self.path_format.format(frame, track, 'x'))
-        image_anno = self.labels[video][track][frame]
-        return image_path, image_anno
+        image_anno = self.labels[video]["tracks"][track][frame]
+        image_size = self.labels[video]["frame_size"]
+        return image_path, image_anno, image_size
 
     def get_positive_pair(self, index):
         video_name = self.videos[index]
         video = self.labels[video_name]
-        track = np.random.choice(list(video.keys()))
-        track_info = video[track]
+        track = np.random.choice(list(video["tracks"].keys())) # random choose a track id from a video
+        track_info = video["tracks"][track]
 
         frames = track_info['frames']
         template_frame = np.random.randint(0, len(frames))
@@ -155,8 +158,8 @@ class SubDataset(object):
             index = np.random.randint(0, self.num)
         video_name = self.videos[index]
         video = self.labels[video_name]
-        track = np.random.choice(list(video.keys()))
-        track_info = video[track]
+        track = np.random.choice(list(video["tracks"].keys()))
+        track_info = video["tracks"][track]
         frames = track_info['frames']
         frame = np.random.choice(frames)
         return self.get_image_anno(video_name, track, frame)
@@ -270,8 +273,9 @@ class TrkDataset(Dataset):
             if dataset.start_idx + dataset.num > index:
                 return dataset, index - dataset.start_idx
 
-    def _get_bbox(self, image, shape):
+    def _get_bbox(self, image, shape, raw_img_size):
         imh, imw = image.shape[:2]
+        assert imh == imw
         if len(shape) == 4:
             w, h = shape[2]-shape[0], shape[3]-shape[1]
         else:
@@ -282,11 +286,27 @@ class TrkDataset(Dataset):
         hc_z = h + context_amount * (w+h)
         s_z = np.sqrt(wc_z * hc_z)
         scale_z = exemplar_size / s_z
+        s_x = imh / scale_z
+        bb_center = [(shape[2]+shape[0])/2., (shape[3]+shape[1])/2.]
+        mask = [0, 0, imw, imh]
+        if bb_center[0] < s_x/2:
+            mask[0] = (s_x/2 - bb_center[0]) * scale_z
+        if bb_center[1] < s_x/2:
+            mask[1] = (s_x/2 - bb_center[1]) * scale_z
+        if bb_center[0] + s_x/2 > raw_img_size[0]:
+            mask[2] = mask[2] - (bb_center[0] + s_x/2 - raw_img_size[0]) * scale_z
+        if bb_center[1] + s_x/2 > raw_img_size[1]:
+            mask[3] = mask[3] - (bb_center[1] + s_x/2 - raw_img_size[1]) * scale_z
+
+
         w = w*scale_z
         h = h*scale_z
-        cx, cy = imw//2, imh//2
+        cx, cy = imw/2., imh/2. # TODO: original is imw//2, imh//2
         bbox = center2corner(Center(cx, cy, w, h))
-        return bbox
+
+        #print("raw shape: {}, raw bbox : {}, raw mask: {}".format(shape, bbox, mask))
+
+        return bbox, mask
 
     def __len__(self):
         return self.num
@@ -313,19 +333,22 @@ class TrkDataset(Dataset):
 
 
         # get bounding box
-        template_box = self._get_bbox(template_image, template[1])
-        search_box = self._get_bbox(search_image, search[1])
+        template_box, template_mask  = self._get_bbox(template_image, template[1], template[2])
+        search_box, search_mask = self._get_bbox(search_image, search[1], search[2])
 
+        #print("search_box: {}, search_mask: {}".format(search_box, search_mask))
 
         # augmentation
-        template, _ = self.template_aug(template_image,
-                                        template_box,
-                                        self.exempler_size)
+        template, _ , template_mask = self.template_aug(template_image,
+                                                        template_box,
+                                                        template_mask,
+                                                        self.exempler_size)
 
-        search, input_bbox = self.search_aug(search_image,
-                                       search_box,
-                                       self.search_size)
-
+        search, input_bbox, search_mask = self.search_aug(search_image,
+                                                          search_box,
+                                                          search_mask,
+                                                          self.search_size)
+        #print("after aug search_box: {}, search_mask: {}".format(search_box, search_mask))
 
         hm = np.zeros((self.output_size, self.output_size), dtype=np.float32)
 
@@ -363,10 +386,12 @@ class TrkDataset(Dataset):
         # https://pytorch.org/docs/stable/torchvision/transforms.html#torchvision.transforms.ToTensor
         template = self.normalize(np.round(template).astype(np.uint8))
         search = self.normalize(np.round(search).astype(np.uint8))
+        template_mask = torch.as_tensor(template_mask)
+        search_mask =  torch.as_tensor(search_mask)
 
         target_dict =  {'hm': hm, 'reg': reg, 'wh': wh, 'ind': torch.as_tensor(ind), 'valid': torch.as_tensor(valid), 'bbox_debug': torch.as_tensor(input_bbox)}
 
-        return template, search, target_dict
+        return template, search, template_mask, search_mask, target_dict
 
 def build(image_set, args):
 

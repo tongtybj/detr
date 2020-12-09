@@ -12,7 +12,7 @@ import torchvision.transforms as T
 import datasets.utils
 from datasets.utils import crop_image, siamfc_like_scale, get_exemplar_size, get_context_amount # TODO: move to utils
 from util.box_ops import box_cxcywh_to_xyxy
-from util.misc import is_dist_avail_and_initialized
+from util.misc import is_dist_avail_and_initialized, nested_tensor_from_tensor_list
 import cv2
 import time
 
@@ -66,7 +66,7 @@ class Tracker(object):
         channel_avg = np.mean(img, axis=(0, 1))
 
         # get crop
-        scale_z = siamfc_like_scale(bbox_xyxy)[1]
+        s_z, scale_z = siamfc_like_scale(bbox_xyxy)
         template_image, _ = crop_image(img, bbox_xyxy, padding = channel_avg)
 
         self.rect_template_image = template_image.copy()
@@ -78,8 +78,20 @@ class Tracker(object):
         y2 = np.round(exemplar_size/2 + init_bbox[1]/2).astype(np.uint8)
         cv2.rectangle(self.rect_template_image, (x1, y1), (x2, y2), (0,255,0), 3)
 
+        # get mask
+        self.template_mask = [0, 0, template_image.shape[0], template_image.shape[1]]
+        if self.center_pos[0] < s_z/2:
+            self.template_mask[0] = (s_z/2 - self.center_pos[0]) * scale_z
+        if self.center_pos[1] < s_z/2:
+            self.template_mask[1] = (s_z/2 - self.center_pos[1]) * scale_z
+        if self.center_pos[0] + s_z/2 > img.shape[1]:
+            self.template_mask[2] = self.template_mask[2] - (self.center_pos[0] + s_z/2 - img.shape[1]) * scale_z
+        if self.center_pos[1] + s_z/2 > img.shape[0]:
+            self.template_mask[3] = self.template_mask[3] - (self.center_pos[1] + s_z/2 - img.shape[0]) * scale_z
+
+
         # normalize and conver to torch.tensor
-        self.template = self.image_normalize(np.round(template_image).astype(np.uint8)).unsqueeze(0).cuda()
+        self.template = self.image_normalize(np.round(template_image).astype(np.uint8)).cuda()
         self.first_frame = True
 
         # debug
@@ -99,17 +111,29 @@ class Tracker(object):
                      self.center_pos[1] + self.size[1] / 2]
         channel_avg = np.mean(img, axis=(0, 1))
         _, search_image = crop_image(img, bbox_xyxy, padding = channel_avg, instance_size = self.search_size)
-        scale_z = siamfc_like_scale(bbox_xyxy)[1]
+        s_z, scale_z = siamfc_like_scale(bbox_xyxy)
+        s_x = self.search_size / scale_z
+        # get mask
+        search_mask = [0, 0, search_image.shape[0], search_image.shape[1]]
+        if self.center_pos[0] < s_x/2:
+            search_mask[0] = (s_x/2 - self.center_pos[0]) * scale_z
+        if self.center_pos[1] < s_x/2:
+            search_mask[1] = (s_x/2 - self.center_pos[1]) * scale_z
+        if self.center_pos[0] + s_x/2 > img.shape[1]:
+            search_mask[2] = search_mask[2] - (self.center_pos[0] + s_x/2 - img.shape[1]) * scale_z
+        if self.center_pos[1] + s_x/2 > img.shape[0]:
+            search_mask[3] = search_mask[3] - (self.center_pos[1] + s_x/2 - img.shape[0]) * scale_z
 
         # normalize and conver to torch.tensor
-        search = self.image_normalize(np.round(search_image).astype(np.uint8)).unsqueeze(0).cuda()
+        search = self.image_normalize(np.round(search_image).astype(np.uint8)).cuda()
 
         with torch.no_grad():
             if self.first_frame:
-                outputs = self.model(search, self.template)
+                outputs = self.model(nested_tensor_from_tensor_list([search], [torch.as_tensor(search_mask).float()]),
+                                     nested_tensor_from_tensor_list([self.template], [torch.as_tensor(self.template_mask).float()]))
                 self.first_frame = False
             else:
-                outputs = self.model(search)
+                outputs = self.model(nested_tensor_from_tensor_list([search], [torch.as_tensor(search_mask).float()]))
 
 
         outputs = self.postprocess(outputs)
@@ -120,7 +144,7 @@ class Tracker(object):
         assert heatmap.size(0) == self.heatmap_size * self.heatmap_size
         raw_heatmap = heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format
         # print("postprocess raw heatmap shape: {}".format(raw_heatmap.shape))
-        
+
         if torch.max(heatmap) > self.score_threshold:
 
 

@@ -270,12 +270,9 @@ def collate_fn(batch):
     # batch: a list (batch_size) of dictionally from dataset.__item__
     batch = list(zip(*batch)) # batch = [(3, h_temp, w_temp) x bn, (3, h_serch, w_serch) x bn, (target_dict) x bn]
 
-    assert len(batch) == 3
+    # batch[0] = nested_tensor_from_tensor_list(batch[0]) # template
+    # batch[1] = nested_tensor_from_tensor_list(batch[1]) # search
 
-    batch[0] = nested_tensor_from_tensor_list(batch[0]) # template
-    #print("template mask shape: {}, content: {}".format(batch[0].mask.shape, batch[0].mask))
-    batch[1] = nested_tensor_from_tensor_list(batch[1]) # search
-    #print("search mask shape: {}, content: {}".format(batch[1].mask.shape, batch[1].mask))
     return tuple(batch)
 
 
@@ -311,26 +308,31 @@ class NestedTensor(object):
         return str(self.tensors)
 
 
-def nested_tensor_from_tensor_list(tensor_list: List[Tensor]):
+def nested_tensor_from_tensor_list(tensor_list: List[Tensor], mask_list: List[Tensor]):
     # TODO make this more general
-    if tensor_list[0].ndim == 3:
+    if tensor_list[0].ndim == 3 and mask_list[0].ndim == 1:
         if torchvision._is_tracing():
             # nested_tensor_from_tensor_list() does not export well to ONNX
             # call _onnx_nested_tensor_from_tensor_list() instead
-            return _onnx_nested_tensor_from_tensor_list(tensor_list)
+            raise ValueError('Not supported')
+            #return _onnx_nested_tensor_from_tensor_list(tensor_list)
 
-        # TODO make it support different-sized images
-        max_size = _max_by_axis([list(img.shape) for img in tensor_list])
-        # min_size = tuple(min(s) for s in zip(*[img.shape for img in tensor_list]))
-        batch_shape = [len(tensor_list)] + max_size
-        b, c, h, w = batch_shape
+        b = len(tensor_list)
+        c, h, w = tensor_list[0].shape
+
+        if isinstance(tensor_list, (list, tuple)):
+            tensor = torch.stack(tensor_list)
+        elif isinstance(tensor_list, torch.Tensor):
+            tensor = tensor_list
+        else:
+            raise ValueError('not supported')
+
         dtype = tensor_list[0].dtype
         device = tensor_list[0].device
-        tensor = torch.zeros(batch_shape, dtype=dtype, device=device)
         mask = torch.ones((b, h, w), dtype=torch.bool, device=device)
-        for img, pad_img, m in zip(tensor_list, tensor, mask):
-            pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
-            m[: img.shape[1], :img.shape[2]] = False
+        for m, bbox in zip(mask, mask_list):
+            bbox = torch.round(bbox).int()
+            m[bbox[1]:bbox[3], bbox[0]:bbox[2]] = False
     else:
         raise ValueError('not supported')
     return NestedTensor(tensor, mask)
@@ -497,12 +499,14 @@ def reg_l1_loss(output, ind, target):
     loss = F.l1_loss(pred, target, reduction='none')
     return loss
 
-def neg_loss(pred, gt):
-  ''' FocalLoss for heatmap (copy from CenterNet => calculate the mean).
+def neg_loss(pred, gt, mask):
+  ''' FocalLoss for heatmap with mask (copy from CenterNet => calculate the mean).
     Arguments:
-      pred (batch x c x h x w)
-      gt (batch x c x h x w)
+      pred: [batch, (h x w), 1]
+      gt:   [batch, (h x w), 1]
+      mask: [batch, (h x w), 1]
   '''
+
   pos_inds = gt.eq(1).float()
   neg_inds = gt.lt(1).float()
 
@@ -513,17 +517,27 @@ def neg_loss(pred, gt):
   pos_loss = torch.log(pred) * torch.pow(1 - pred, 2) * pos_inds
   neg_loss = torch.log(1 - pred) * torch.pow(pred, 2) * neg_weights * neg_inds
 
-  num_pos  = pos_inds.float().sum()
+  #print("neg_loss sum without mask:  pos_loss: {}, neg_loss: {}".format(pos_loss.sum(), neg_loss.sum()))
 
-  pos_loss = pos_loss.sum()
-  neg_loss = neg_loss.sum()
+  if mask is None:
+      pos_loss_sum = pos_loss.sum()
+      neg_loss_sum = neg_loss.sum()
+  else:
+      pos_loss_sum = torch.masked_select(pos_loss, mask).sum()
+      neg_loss_sum = torch.masked_select(neg_loss, mask).sum()
+
+
+  #print("neg_loss sum with mask:  pos_loss: {}, neg_loss: {}".format(pos_loss.sum(), neg_loss.sum()))
+
+  #print("mask sum: {}".format(mask.int().sum()))
 
   """
+  num_pos  = pos_inds.float().sum()
   if num_pos == 0:
     loss = loss - neg_loss
   else:
     loss = loss - (pos_loss + neg_loss) / num_pos
   """
 
-  loss = loss - (pos_loss + neg_loss) / gt.size(0) # calculate the mean for all sample, regardless positive or negative sample
+  loss = loss - (pos_loss_sum + neg_loss_sum) / gt.size(0) # calculate the mean for all sample, regardless positive or negative sample
   return loss

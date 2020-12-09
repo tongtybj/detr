@@ -165,9 +165,12 @@ def image_curation(num_threads, vid_start, data_type):
 
                 if video not in js:
                     js[video] = {}
-                if obj not in js[video]:
-                    js[video][obj] = {}
-                js[video][obj][frame] = [x1, y1, x2, y2]
+                    js[video]["frame_size"] = [image_w, image_h]
+                    js[video]["tracks"] = {}
+                if obj not in js[video]["tracks"]:
+                    js[video]["tracks"][obj] = {}
+                js[video]["tracks"][obj][frame] = [x1, y1, x2, y2]
+
 
     if 'yt_bb_detection_train' == d_set:
         json.dump(js, open(join(save_base_path, 'train.json'), 'w'), indent=4, sort_keys=True)

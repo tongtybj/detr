@@ -22,12 +22,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
 
-    for template_samples, search_samples, targets in metric_logger.log_every(data_loader, print_freq, header):
-        template_samples = template_samples.to(device)
-        search_samples = search_samples.to(device)
+    for template_samples, search_samples, template_masks, search_masks, targets in metric_logger.log_every(data_loader, print_freq, header):
+
+        #print("search mask: {}".format(search_masks))
+
+        template_nested_samples = utils.nested_tensor_from_tensor_list(template_samples, template_masks).to(device)
+        search_nested_samples = utils.nested_tensor_from_tensor_list(search_samples, search_masks).to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(search_samples, template_samples)
+        outputs = model(search_nested_samples, template_nested_samples)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
@@ -72,12 +75,13 @@ def evaluate(model, criterion, postprocessors, data_loader, device, output_dir):
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Val:'
 
-    for template_samples, search_samples, targets in metric_logger.log_every(data_loader, 10, header):
-        template_samples = template_samples.to(device)
-        search_samples = search_samples.to(device)
+    for template_samples, search_samples, template_masks, search_masks, targets in metric_logger.log_every(data_loader, 10, header):
+
+        template_nested_samples = utils.nested_tensor_from_tensor_list(template_samples, template_masks).to(device)
+        search_nested_samples = utils.nested_tensor_from_tensor_list(search_samples, search_masks).to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(search_samples, template_samples)
+        outputs = model(search_nested_samples, template_nested_samples)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
 
