@@ -55,6 +55,7 @@ def image_curation(num_threads=12, year = 2017):
 
 
         n_imgs = len(coco.imgs)
+
         with futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
             fs = [executor.submit(crop_img, coco.loadImgs(id)[0],
                                   coco.loadAnns(coco.getAnnIds(imgIds=id, iscrowd=None)),
@@ -73,6 +74,8 @@ def image_curation(num_threads=12, year = 2017):
 
             if len(anns) > 0:
                 dataset[img_crop_base_path] = dict()
+                dataset[img_crop_base_path]['frame_size'] = [img['width'], img['height']]
+                dataset[img_crop_base_path]['tracks'] = dict()
 
             for trackid, ann in enumerate(anns):
                 rect = ann['bbox']
@@ -80,7 +83,7 @@ def image_curation(num_threads=12, year = 2017):
                 bbox = [rect[0], rect[1], rect[0]+rect[2], rect[1]+rect[3]]
                 if rect[2] <= 0 or rect[3] <= 0:  # lead nan error in cls.
                     continue
-                dataset[img_crop_base_path]['{:02d}'.format(trackid)] = {'000000': bbox}
+                dataset[img_crop_base_path]['tracks']['{:02d}'.format(trackid)] = {'000000': bbox}
 
         print('save json (dataset), please wait 20 seconds~')
         json.dump(dataset, open('{}/{}.json'.format(crop_path, data_type), 'w'), indent=4, sort_keys=True)

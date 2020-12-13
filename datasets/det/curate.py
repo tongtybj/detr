@@ -69,6 +69,7 @@ def image_curation(num_threads=24):
 
         n_imgs = len(xmls)
         sub_set_crop_path = join(crop_path, sub_set)
+
         with futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
             fs = [executor.submit(crop_img, xml, sub_set_crop_path) for xml in xmls]
             for i, f in enumerate(futures.as_completed(fs)):
@@ -79,6 +80,9 @@ def image_curation(num_threads=24):
             print('subset: {} frame id: {:08d} / {:08d}'.format(sub_set, f, n_imgs))
             xmltree = ET.parse(xml)
             objects = xmltree.findall('object')
+            image_size = xmltree.find('size')
+            image_width = int(image_size.find('width').text)
+            image_height = int(image_size.find('height').text)
 
             video = join(sub_set, xml.split('/')[-1].split('.')[0])
 
@@ -89,10 +93,13 @@ def image_curation(num_threads=24):
                 frame = '%06d' % (0)
                 obj = '%02d' % (id)
                 if video not in dataset:
-                    dataset[video] = {}
+                    dataset[video] = dict()
+                    dataset[video]['frame_size'] = [image_width, image_height]
+                    dataset[video]['tracks'] = dict()
+
                 if obj not in dataset[video]:
-                    dataset[video][obj] = {}
-                dataset[video][obj][frame] = bbox
+                    dataset[video]['tracks'][obj] = {}
+                dataset[video]['tracks'][obj][frame] = bbox
 
     train = {k:v for (k,v) in dataset.items() if 'i/' not in k}
     val = {k:v for (k,v) in dataset.items() if 'i/' in k}
