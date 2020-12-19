@@ -90,6 +90,13 @@ class BackboneBase(nn.Module):
             m = tensor_list.mask
             assert m is not None
             mask = F.interpolate(m[None].float(), size=x.shape[-2:]).to(torch.bool)[0]
+
+            # TODO: workaround to avoid NaN of attention calculation because of a full "True" mask
+            invalid_indices = (torch.logical_not(mask).sum(dim=[1,2]) == 0).nonzero().squeeze(-1)
+            if(len(invalid_indices)):
+                #print("workaround to avoid NaN for {}".format(invalid_indices))
+                mask[invalid_indices] = torch.zeros(x.shape[-2:], dtype=torch.bool, device=mask.device)
+            
             out[name] = NestedTensor(x, mask)
         return out
 
