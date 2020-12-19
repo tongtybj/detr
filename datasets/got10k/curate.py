@@ -27,7 +27,8 @@ def crop_video(subdir, subset, video):
     video_crop_base_path = join(save_base_path, subset, video)
     if not isdir(video_crop_base_path): makedirs(video_crop_base_path)
 
-    print("crop video: {}".format(video))
+    if debug:
+        print("crop video: {}".format(video))
     frames = sorted(glob.glob(join(video_dir, '*.jpg')))
 
     with open(join(video_dir, 'groundtruth.txt')) as f:

@@ -6,6 +6,7 @@ Please download dataset (all chunks) from https://drive.google.com/file/d/1O2DLx
 **note**: you can also download a single subset from https://drive.google.com/drive/folders/1v09JELSXM_v7u3dF7akuqqkVG8T1EK2_
 
 ````shell
+mv $PWD/lasot/LaSOTBenchmark $PWD/lasot/train
 ln -sfb $PWD/lasot ./dataset # important
 ````
 
