@@ -57,9 +57,8 @@ def get_args_parser():
     parser.add_argument('--return_layers', default=[], nargs='+')
     parser.add_argument('--weighted', action='store_true',
                         help="the weighted for the multiple input embedding for transformer")
-    parser.add_argument('--transformer_mask', action='store_true',
-                        help="mask for transformer")
-
+    parser.add_argument('--transformer_mask', action='store_false',
+                        help="mask for transformer") #workaround to enable transformer mask for default
 
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
@@ -339,6 +338,7 @@ if __name__ == '__main__':
 
     device = torch.device('cuda')
 
+    assert args.transformer_mask # should be True
     model, criterion, postprocessors = build_model(args)
 
     checkpoint = torch.load(args.checkpoint, map_location='cpu')
