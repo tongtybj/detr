@@ -225,6 +225,7 @@ class TrkDataset(Dataset):
             self.all_dataset.append(sub_dataset)
 
 
+        print("size of {} dataset: {}".format(image_set, self.num))
         self.pick = self.shuffle()
 
         # data augmentation
@@ -396,6 +397,13 @@ class TrkDataset(Dataset):
 def build(image_set, args):
 
     assert len(args.dataset_paths) == len(args.dataset_video_frame_ranges) == len(args.dataset_num_uses)
+
+    if image_set == 'val':
+        if len(args.dataset_num_uses) == len(args.eval_dataset_num_uses):
+            args.dataset_num_uses = args.eval_dataset_num_uses
+        else:
+            args.dataset_num_uses = [-1] * len(args.dataset_num_uses)
+    
     dataset = TrkDataset(image_set, args.dataset_paths,
                          args.dataset_video_frame_ranges, args.dataset_num_uses,
                          args.template_aug_shift, args.template_aug_scale, args.template_aug_color,

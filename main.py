@@ -80,7 +80,6 @@ def get_args_parser():
 
     # dataset parameters
     parser.add_argument('--dataset_paths', default=[], nargs='+') # the path to datasets
-
     parser.add_argument('--dataset_video_frame_ranges', default=[100], nargs='+')
     parser.add_argument('--dataset_num_uses', default=[-1], nargs='+')
     parser.add_argument('--template_aug_shift', default=4, type=int)
@@ -93,6 +92,7 @@ def get_args_parser():
     parser.add_argument('--exempler_size', default=127, type=int)
     parser.add_argument('--search_size', default=255, type=int)
     parser.add_argument('--negative_aug_rate', default=0.2, type=float)
+    parser.add_argument('--eval_dataset_num_uses', default=[], nargs='+')
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
@@ -102,7 +102,6 @@ def get_args_parser():
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
-    parser.add_argument('--eval', action='store_true')
     parser.add_argument('--num_workers', default=2, type=int)
 
     # distributed training parameters
@@ -179,7 +178,7 @@ def main(args):
         else:
             checkpoint = torch.load(args.resume, map_location='cpu')
         model_without_ddp.load_state_dict(checkpoint['model'])
-        if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
+        if 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
             args.start_epoch = checkpoint['epoch'] + 1
