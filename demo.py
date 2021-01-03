@@ -55,8 +55,9 @@ def get_args_parser():
     parser.add_argument('--weighted', action='store_true',
                         help="the weighted for the multiple input embedding for transformer")
     parser.add_argument('--transformer_mask', action='store_false',
-                        help="mask for transformer") #workaround to enable transformer mask for defanult
-
+                        help="mask for transformer") # workaround to enable transformer mask for defanult
+    parser.add_argument('--multi_frame', action='store_true',
+                        help="use multi frame for encoder (template images)")
 
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',

@@ -25,7 +25,9 @@ class PositionEmbeddingSine(nn.Module):
             scale = 2 * math.pi
         self.scale = scale
 
-    def forward(self, tensor_list: NestedTensor):
+        self.segment_embdded_factor = 0.0  #0.5, 0.0 gives best result for VOT2018. TODO: hyperparameter
+
+    def forward(self, tensor_list: NestedTensor, multi_frame = False):
         x = tensor_list.tensors
 
         #print("x: {}".format(x.shape))
@@ -50,7 +52,7 @@ class PositionEmbeddingSine(nn.Module):
 
         #print("x_embed: {}".format(x_embed.shape))
         #print("y_embed: {}".format(y_embed.shape))
-        #print("dim_t: {}".format(dim_t.shape))
+        #print("dim_t: {}".format(dim_t))
 
         pos_x = x_embed[:, :, :, None] / dim_t
         pos_y = y_embed[:, :, :, None] / dim_t
@@ -70,8 +72,13 @@ class PositionEmbeddingSine(nn.Module):
 
         #print("pos: {}".format(pos.shape))
 
-        return pos
+        # add an additioanl segment (frame) embedding for multilple frames.
+        if multi_frame:
+            # a temporal segment embedding for two frames => TODO: should learn?
+            assert(len(pos) == 2)
+            pos[-1].add_(self.segment_embdded_factor)
 
+        return pos
 
 class PositionEmbeddingLearned(nn.Module):
     """

@@ -53,11 +53,28 @@ class Transformer(nn.Module):
         search_mask: [batch_size x H_search x W_search]
         search_pos_embed: [batch_size x hidden_dim x H_search x W_search]
         """
-        # flatten and permute bNxCxHxW to HWxbNxC for encoder in transformer
-        template_src = template_src.flatten(2).permute(2, 0, 1)
-        template_pos_embed = template_pos_embed.flatten(2).permute(2, 0, 1)
-        if template_mask is not None:
-            template_mask = template_mask.flatten(1)
+
+        if len(template_src) > 1 and len(search_src) == 1:
+            # print("do multiple frame mode ")
+            template_src = template_src.flatten(2) # flatten: bNxCxHxW to bNxCxHW
+            template_src = torch.cat(torch.split(template_src,1), -1) # concat: bNxCxHW to 1xCxbNHW
+            template_src = template_src.permute(2, 0, 1) # permute 1xCxbNHW to bNHWx1xC for encoder in transformer
+
+            template_pos_embed = template_pos_embed.flatten(2) # flatten: bNxCxHxW to bNxCxHW
+            template_pos_embed = torch.cat(torch.split(template_pos_embed,1), -1) # concat: bNxCxHW to 1xCxbNHW
+            template_pos_embed = template_pos_embed.permute(2, 0, 1) # permute 1xCxbNHW to bNHWx1xC for encoder in transformer
+
+            if template_mask is not None:
+                template_mask = template_mask.flatten(1) # flatten: bNxHxW to bNxHW
+                template_mask = torch.cat(torch.split(template_mask,1), -1) # concat: bNxHW to 1xbNHW
+
+        else:
+            # flatten and permute bNxCxHxW to HWxbNxC for encoder in transformer
+            template_src = template_src.flatten(2).permute(2, 0, 1)
+            template_pos_embed = template_pos_embed.flatten(2).permute(2, 0, 1)
+            if template_mask is not None:
+                template_mask = template_mask.flatten(1)
+
 
         # encoding the template embedding with positional embbeding
         if memory is None:

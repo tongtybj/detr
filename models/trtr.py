@@ -84,7 +84,13 @@ class TRTR(nn.Module):
         template_features = None
         template_pos = None
         if template_samples is not None:
-            template_features, self.template_pos  = self.backbone(template_samples)
+
+            multi_frame = False
+            if len(template_samples.tensors) > 1 and len(search_samples.tensors) == 1:
+                # print("do multiple frame mode for backbone")
+                multi_frame = True
+
+            template_features, self.template_pos  = self.backbone(template_samples, multi_frame = multi_frame)
 
             self.template_mask = None
             if self.transformer_mask:

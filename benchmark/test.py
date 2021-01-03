@@ -58,7 +58,9 @@ def get_args_parser():
     parser.add_argument('--weighted', action='store_true',
                         help="the weighted for the multiple input embedding for transformer")
     parser.add_argument('--transformer_mask', action='store_false',
-                        help="mask for transformer") #workaround to enable transformer mask for default
+                        help="mask for transformer") # workaround to enable transformer mask for default
+    parser.add_argument('--multi_frame', action='store_true',
+                        help="use multi frame for encoder (template images)")
 
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
@@ -156,6 +158,7 @@ def main(args, tracker):
                                  pred_bbox[3] - pred_bbox[1]]
 
                     template_image = outputs['template_image']
+                    prev_template_image = outputs['prev_template_image']
                     search_image = outputs['search_image']
                     raw_heatmap = outputs['raw_heatmap']
                     post_heatmap = outputs['post_heatmap']
@@ -191,6 +194,8 @@ def main(args, tracker):
                         cv2.imshow("search_raw", search_image)
                         cv2.imshow("raw_heatmap", raw_heatmap)
                         cv2.imshow("post_heatmap", post_heatmap)
+                        if prev_template_image is not None:
+                            cv2.imshow("prev_template", prev_template_image)
                         k = cv2.waitKey(0)
                         if k == 27:         # wait for ESC key to exit
                             sys.exit()
@@ -251,6 +256,7 @@ def main(args, tracker):
                     pred_bboxes.append(pred_bbox)
                     scores.append(outputs['score'])
                     template_image = outputs['template_image']
+                    prev_template_image = outputs['prev_template_image']
                     search_image = outputs['search_image']
                     raw_heatmap = outputs['raw_heatmap']
                     post_heatmap = outputs['post_heatmap']
@@ -274,6 +280,8 @@ def main(args, tracker):
                         cv2.imshow("search_raw", search_image)
                         cv2.imshow("raw_heatmap", raw_heatmap)
                         cv2.imshow("post_heatmap", post_heatmap)
+                        if prev_template_image is not None:
+                            cv2.imshow("prev_template", prev_template_image)
                         k = cv2.waitKey(0)
                         if k == 27:         # wait for ESC key to exit
                             sys.exit()
