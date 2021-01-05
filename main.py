@@ -239,7 +239,7 @@ def main(args):
         if utils.is_main_process():
             if (epoch + 1) % args.benchmark_test_step == 0:
                 model.eval()
-                tracker = build_tracker(model, postprocessors["bbox"], benchmark_test_args)
+                tracker = build_tracker(model_without_ddp, postprocessors["bbox"], benchmark_test_args)
                 benchmark_start_time = time.time()
                 benchmark_test.main(benchmark_test_args, tracker)
                 benchmark_time = time.time() - benchmark_start_time
