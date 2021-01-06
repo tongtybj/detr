@@ -172,6 +172,27 @@ def main(args, tracker):
                         pred_bboxes.append(2)
                         frame_counter = idx + 5 # skip 5 frames
                         lost_number += 1
+
+                        if args.vis and args.debug_vis:
+                            cv2.polylines(img, [np.array(gt_bbox, np.int).reshape((-1, 2))], True, (0, 255, 0), 3)
+
+                            bbox = list(map(int, pred_bbox))
+                            cv2.rectangle(img, (bbox[0], bbox[1]),
+                                          (bbox[0]+bbox[2], bbox[1]+bbox[3]), (0, 255, 255), 3)
+                            cv2.putText(img, str(idx), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                            cv2.putText(img, 'lost', (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                            cv2.imshow(video.name, img)
+
+                            cv2.imshow("template", template_image)
+                            cv2.imshow("search_raw", search_image)
+                            cv2.imshow("raw_heatmap", raw_heatmap)
+                            cv2.imshow("post_heatmap", post_heatmap)
+                            if prev_template_image is not None:
+                                cv2.imshow("prev_template", prev_template_image)
+                            k = cv2.waitKey(0)
+                            if k == 27:         # wait for ESC key to exit
+                                sys.exit()
+
                 else:
                     pred_bboxes.append(0)
                 toc += cv2.getTickCount() - tic
