@@ -35,11 +35,10 @@ class TRTR(nn.Module):
         # heatmap and bbox
         # TODO: try to use MLP or Conv2d_3x3 before fully-connected like CenterNet
         backbone_layer_num = len(backbone.num_channels_list)
-        self.reg_embed = nn.ModuleList([MLP(backbone_layer_num * hidden_dim, backbone_layer_num * hidden_dim, 2, 3) for i in backbone.num_channels_list])
-        self.wh_embed = nn.ModuleList([MLP(backbone_layer_num * hidden_dim, backbone_layer_num * hidden_dim, 2, 3) for i in backbone.num_channels_list])
-        self.heatmap_embed = nn.ModuleList([nn.Linear(backbone_layer_num * hidden_dim, 1) for i in backbone.num_channels_list])
-        for embed in self.heatmap_embed:
-            embed.bias.data.fill_(-2.19)
+        self.reg_embed = MLP(backbone_layer_num * hidden_dim, backbone_layer_num * hidden_dim, 2, 3)
+        self.wh_embed = MLP(backbone_layer_num * hidden_dim, backbone_layer_num * hidden_dim, 2, 3)
+        self.heatmap_embed = nn.Linear(backbone_layer_num * hidden_dim, 1)
+        self.heatmap_embed.bias.data.fill_(-2.19)
 
         self.input_projs = nn.ModuleList([nn.Conv2d(num_channels, hidden_dim, kernel_size=1) for num_channels in backbone.num_channels_list])
 
@@ -118,7 +117,7 @@ class TRTR(nn.Module):
 
 
         hs_list = []
-        for i, (template_src_proj, search_src_proj, transformer, reg_embed, wh_embed, heatmap_embed) in enumerate(zip(self.template_src_projs, search_src_projs, self.transformer, self.reg_embed, self.wh_embed, self.heatmap_embed)):
+        for i, (template_src_proj, search_src_proj, transformer) in enumerate(zip(self.template_src_projs, search_src_projs, self.transformer)):
             if template_samples is not None:
                 hs, memory = transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1])
                 self.memory.append(memory)
@@ -129,9 +128,9 @@ class TRTR(nn.Module):
 
         concat_hs = torch.cat(hs_list, -1)
 
-        hs_reg = reg_embed(concat_hs)
-        hs_wh =  wh_embed(concat_hs)
-        hs_hm = heatmap_embed(concat_hs)
+        hs_reg = self.reg_embed(concat_hs)
+        hs_wh =  self.wh_embed(concat_hs)
+        hs_hm = self.heatmap_embed(concat_hs)
 
         outputs_heatmap = hs_hm  # we have different sigmoid process for training and inference, so we do not get sigmoid here.
 
