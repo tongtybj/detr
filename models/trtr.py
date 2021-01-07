@@ -35,8 +35,7 @@ class TRTR(nn.Module):
         # heatmap and bbox
         # TODO: try to use MLP or Conv2d_3x3 before fully-connected like CenterNet
         backbone_layer_num = len(backbone.num_channels_list)
-        self.reg_embed = MLP(backbone_layer_num * hidden_dim, backbone_layer_num * hidden_dim, 2, 3)
-        self.wh_embed = MLP(backbone_layer_num * hidden_dim, backbone_layer_num * hidden_dim, 2, 3)
+        self.bbox_embed = MLP(backbone_layer_num * hidden_dim, backbone_layer_num * hidden_dim, 4, 3)
         self.heatmap_embed = nn.Linear(backbone_layer_num * hidden_dim, 1)
         self.heatmap_embed.bias.data.fill_(-2.19)
 
@@ -128,16 +127,16 @@ class TRTR(nn.Module):
 
         concat_hs = torch.cat(hs_list, -1)
 
-        hs_reg = self.reg_embed(concat_hs)
-        hs_wh =  self.wh_embed(concat_hs)
+        hs_bbox = self.bbox_embed(concat_hs)
         hs_hm = self.heatmap_embed(concat_hs)
 
         outputs_heatmap = hs_hm  # we have different sigmoid process for training and inference, so we do not get sigmoid here.
 
         # TODO: whether can you sigmoid() for the offset regression,
         # YoLo V3 uses sigmoid: https://blog.paperspace.com/how-to-implement-a-yolo-object-detector-in-pytorch/
-        outputs_bbox_reg = hs_reg.sigmoid()
-        outputs_bbox_wh = hs_wh.sigmoid()
+        outputs_bbox = hs_bbox.sigmoid()
+        outputs_bbox_reg = outputs_bbox.split(2,-1)[0]
+        outputs_bbox_wh = outputs_bbox.split(2,-1)[1]
 
         search_mask = search_features[-1].mask.flatten(1).unsqueeze(-1) # [bn, output_hegiht *  output_width, 1]
 
