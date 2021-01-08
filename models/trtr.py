@@ -14,16 +14,18 @@ from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
 
 from .backbone import build_backbone
 from .transformer import build_transformer
+from .position_encoding import build_segment_encoding
 
 import time
 import numpy as np
 
 class TRTR(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbone, transformer, aux_loss=False, transformer_mask=False):
+    def __init__(self, backbone, segment_embedding, transformer, aux_loss=False, transformer_mask=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
+            segment_embedding: torch model of the segment embedding for multi frame template. See position_encoding.py
             transformer: torch module of the transformer architecture. See transformer.py
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
@@ -42,19 +44,20 @@ class TRTR(nn.Module):
         self.input_projs = nn.ModuleList([nn.Conv2d(num_channels, hidden_dim, kernel_size=1) for num_channels in backbone.num_channels_list])
 
         self.backbone = backbone
+        self.segment_embedding = segment_embedding
         self.aux_loss = aux_loss
 
         self.template_src_projs = []
         self.template_mask = None
-        self.template_pos = None
+        self.template_pos_seg = None
         self.memory = []
 
         self.transformer_mask = transformer_mask
 
     def forward(self, search_samples: NestedTensor, template_samples: NestedTensor = None):
         """ template_samples is a NestedTensor for template image:
-               - samples.tensor: batched images, of shape [batch_size x 3 x H_template x W_template]
-               - samples.mask: a binary mask of shape [batch_size x H_template x W_template], containing 1 on padded pixels
+               - samples.tensor: batched images, of shape [(batch_size x multi_frame_num) x 3 x H_template x W_template]
+               - samples.mask: a binary mask of shape [(batch_size x multi_frame_num) x H_template x W_template], containing 1 on padded pixels
             search_samples is also a NestedTensor for searching image:
                - samples.tensor: batched images, of shape [batch_size x 3 x H_search x W_search]
                - samples.mask: a binary mask of shape [batch_size x H_search x W_search], containing 1 on padded pixels
@@ -79,14 +82,12 @@ class TRTR(nn.Module):
 
         template_features = None
         template_pos = None
+
         if template_samples is not None:
+            multi_frame_num = len(template_samples.tensors) // len(search_samples.tensors)
 
-            multi_frame = False
-            if len(template_samples.tensors) > 1 and len(search_samples.tensors) == 1:
-                # print("do multiple frame mode for backbone")
-                multi_frame = True
-
-            template_features, self.template_pos  = self.backbone(template_samples, multi_frame = multi_frame)
+            template_features, template_pos  = self.backbone(template_samples)
+            self.template_pos_seg = template_pos[-1] + self.segment_embedding(template_features[-1]) # add seg embedding
 
             self.template_mask = None
             if self.transformer_mask:
@@ -118,10 +119,10 @@ class TRTR(nn.Module):
         hs_list = []
         for i, (template_src_proj, search_src_proj, transformer) in enumerate(zip(self.template_src_projs, search_src_projs, self.transformer)):
             if template_samples is not None:
-                hs, memory = transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1])
+                hs, memory = transformer(template_src_proj, self.template_mask, self.template_pos_seg, search_src_proj, search_mask, search_pos[-1])
                 self.memory.append(memory)
             else:
-                hs = transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1], self.memory[i])[0]
+                hs = transformer(template_src_proj, self.template_mask, self.template_pos_seg, search_src_proj, search_mask, search_pos[-1], self.memory[i])[0]
 
             hs_list.append(hs)
 
@@ -303,11 +304,13 @@ class MLP(nn.Module):
 def build(args):
     device = torch.device(args.device)
     backbone = build_backbone(args)
+    segment_embedding = build_segment_encoding(args)
     transformer = build_transformer(args)
 
     print("start build model")
     model = TRTR(
         backbone,
+        segment_embedding,
         transformer,
         aux_loss=args.aux_loss,
         transformer_mask = args.transformer_mask,

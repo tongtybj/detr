@@ -93,7 +93,7 @@ class BackboneBase(nn.Module):
 
             # TODO: workaround to avoid NaN of attention calculation because of a full "True" mask
             invalid_indices = (torch.logical_not(mask).sum(dim=[1,2]) == 0).nonzero().squeeze(-1)
-            if(len(invalid_indices)):
+            if len(invalid_indices):
                 #print("workaround to avoid NaN for {}".format(invalid_indices))
                 mask[invalid_indices] = torch.zeros(x.shape[-2:], dtype=torch.bool, device=mask.device)
 
@@ -130,7 +130,7 @@ class Joiner(nn.Sequential):
         self.num_channels_list = []
         self.stride = backbone.stride
 
-    def forward(self, tensor_list: NestedTensor, multi_frame = False):
+    def forward(self, tensor_list: NestedTensor):
 
         xs = self[0](tensor_list) # extract feature from search image (embedding)
         out: List[NestedTensor] = []
@@ -138,7 +138,7 @@ class Joiner(nn.Sequential):
         for name, x in xs.items():
             out.append(x)
             # position encoding
-            pos.append(self[1](x, multi_frame).to(x.tensors.dtype))
+            pos.append(self[1](x).to(x.tensors.dtype))
 
             # print("backbone {}: shape: {}".format(name, x.tensors.shape))
 

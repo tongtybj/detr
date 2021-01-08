@@ -27,7 +27,7 @@ class PositionEmbeddingSine(nn.Module):
 
         self.segment_embdded_factor = 0.0  #0.5, 0.0 gives best result for VOT2018. TODO: hyperparameter
 
-    def forward(self, tensor_list: NestedTensor, multi_frame = False):
+    def forward(self, tensor_list: NestedTensor):
         x = tensor_list.tensors
 
         #print("x: {}".format(x.shape))
@@ -72,12 +72,6 @@ class PositionEmbeddingSine(nn.Module):
 
         #print("pos: {}".format(pos.shape))
 
-        # add an additioanl segment (frame) embedding for multilple frames.
-        if multi_frame:
-            # a temporal segment embedding for two frames => TODO: should learn?
-            assert(len(pos) == 2)
-            pos[-1].add_(self.segment_embdded_factor)
-
         return pos
 
 class PositionEmbeddingLearned(nn.Module):
@@ -107,6 +101,32 @@ class PositionEmbeddingLearned(nn.Module):
         ], dim=-1).permute(2, 0, 1).unsqueeze(0).repeat(x.shape[0], 1, 1, 1)
         return pos
 
+class SegmentEmbeddingLearned(nn.Module):
+    """
+    segment embedding, learned.
+    """
+    def __init__(self, num_pos_feats=256, num_segment=2):
+        super().__init__()
+        self.seg_embed = nn.Embedding(num_segment, num_pos_feats)
+        self.num_segment = num_segment
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.uniform_(self.seg_embed.weight)
+
+    def forward(self, tensor_list: NestedTensor):
+        batch_size = len(tensor_list.tensors) // self.num_segment
+        x = tensor_list.tensors
+        h, w = x.shape[-2:]
+        i = torch.arange(self.num_segment, device=x.device)
+        seg_emb = self.seg_embed(i) # embedding: [self.num_segment, num_pos_feats]
+        seg_emb = seg_emb.unsqueeze(0).unsqueeze(0).repeat(h, w, 1, 1) # expand: [h, w, self.num_segment, num_pos_feats]
+        seg = seg_emb.permute(2, 3, 0, 1).repeat(batch_size, 1, 1, 1) # transpose and expand: [batch_size * self.num_segment, num_pos_feats, h, w]
+        # TODO: whether ignore add embedding to the masking area
+        # default: add embedding to the mask area
+
+        return seg
+
 
 def build_position_encoding(args):
     N_steps = args.hidden_dim // 2
@@ -119,3 +139,9 @@ def build_position_encoding(args):
         raise ValueError(f"not supported {args.position_embedding}")
 
     return position_embedding
+
+def build_segment_encoding(args):
+
+    segment_embedding = SegmentEmbeddingLearned(num_pos_feats = args.hidden_dim, num_segment = args.multi_template_num)
+
+    return segment_embedding

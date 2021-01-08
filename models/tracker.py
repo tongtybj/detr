@@ -17,7 +17,7 @@ import cv2
 import time
 
 class Tracker(object):
-    def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf, multi_frame):
+    def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf):
         self.model = model
         self.model.eval()
         self.postprocess = postprocess
@@ -40,15 +40,16 @@ class Tracker(object):
             T.ToTensor(), # Converts a numpy.ndarray (H x W x C) in the range [0, 255] to a torch.FloatTensor of shape (C x H x W) in the range [0.0, 1.0]
             T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
-        self.first_frame = False
+        self.template_update = False
 
-        self.multi_frame = multi_frame
-        self.prev_img = None
         self.rect_template_image = None
+        self.prev_img = None
+        self.prev_img_update = False
         self.prev_rect_template_image = None
-        self.prev_img_udpate = False
-        self.prev_template = None
-        self.prev_template_mask = None
+
+        self.num_segment = self.model.segment_embedding.num_segment
+        if self.num_segment > 2:
+            raise ValueError("only can support multi frame template model with single or two frames")
 
     def _bbox_clip(self, bbox, boundary):
         x1 = max(0, bbox[0])
@@ -97,7 +98,7 @@ class Tracker(object):
 
         # normalize and conver to torch.tensor
         self.init_template = self.image_normalize(np.round(template_image).astype(np.uint8)).cuda()
-        self.first_frame = True
+        self.template_update = True
 
         self.init_best_score = 0
 
@@ -134,33 +135,34 @@ class Tracker(object):
         # normalize and conver to torch.tensor
         search = self.image_normalize(np.round(search_image).astype(np.uint8)).cuda()
 
-        template_list = [self.init_template]
-        template_mask_list = [torch.as_tensor(self.init_template_mask).float()]
+        template_list = [self.init_template] * self.num_segment
+        template_mask_list = [torch.as_tensor(self.init_template_mask).float()] * self.num_segment
 
-        if self.multi_frame and self.prev_img_udpate:
+        if self.num_segment == 2 and self.prev_img_update:
+
+            self.prev_img_update = False
+
             channel_avg = np.mean(self.prev_img, axis=(0, 1))
             prev_template_image, _ = crop_image(self.prev_img, bbox_xyxy, padding = channel_avg)
-            s_z, scale_z = siamfc_like_scale(bbox_xyxy)
-
-            # get mask
-            self.prev_template_mask = [0, 0, prev_template_image.shape[0], prev_template_image.shape[1]]
-            if self.center_pos[0] < s_z/2:
-                self.prev_template_mask[0] = (s_z/2 - self.center_pos[0]) * scale_z
-            if self.center_pos[1] < s_z/2:
-                self.prev_template_mask[1] = (s_z/2 - self.center_pos[1]) * scale_z
-            if self.center_pos[0] + s_z/2 > img.shape[1]:
-                self.prev_template_mask[2] = self.prev_template_mask[2] - (self.center_pos[0] + s_z/2 - img.shape[1]) * scale_z
-            if self.center_pos[1] + s_z/2 > img.shape[0]:
-                self.prev_template_mask[3] = self.prev_template_mask[3] - (self.center_pos[1] + s_z/2 - img.shape[0]) * scale_z
 
             # normalize and conver to torch.tensor
-            self.prev_template = self.image_normalize(np.round(prev_template_image).astype(np.uint8)).cuda()
+            prev_template = self.image_normalize(np.round(prev_template_image).astype(np.uint8)).cuda()
 
-            # debug
-            # you can rewrite template_list and template_mask_list to only assing prev_template
-            # template_list = [prev_template]
-            # template_mask_list = [torch.as_tensor(self.prev_template_mask).float()]
-            # self.first_frame = True
+            # get mask
+            s_z, scale_z = siamfc_like_scale(bbox_xyxy)
+            prev_template_mask = [0, 0, prev_template_image.shape[0], prev_template_image.shape[1]]
+            if self.center_pos[0] < s_z/2:
+                prev_template_mask[0] = (s_z/2 - self.center_pos[0]) * scale_z
+            if self.center_pos[1] < s_z/2:
+                prev_template_mask[1] = (s_z/2 - self.center_pos[1]) * scale_z
+            if self.center_pos[0] + s_z/2 > img.shape[1]:
+                prev_template_mask[2] = prev_template_mask[2] - (self.center_pos[0] + s_z/2 - img.shape[1]) * scale_z
+            if self.center_pos[1] + s_z/2 > img.shape[0]:
+                prev_template_mask[3] = prev_template_mask[3] - (self.center_pos[1] + s_z/2 - img.shape[0]) * scale_z
+
+            template_list[-1] = prev_template
+            template_mask_list[-1] = torch.as_tensor(prev_template_mask).float()
+
 
             # visualize debug
             self.prev_rect_template_image = prev_template_image.copy()
@@ -172,22 +174,16 @@ class Tracker(object):
             y2 = np.round(exemplar_size/2 + init_bbox[1]/2).astype(np.uint8)
             cv2.rectangle(self.prev_rect_template_image, (x1, y1), (x2, y2), (0,255,0), 3)
 
-            #template_list.append(self.prev_template)
-            #template_mask_list.append(torch.as_tensor(self.prev_template_mask).float())
-            template_list.insert(0, self.prev_template)
-            template_mask_list.insert(0, torch.as_tensor(self.prev_template_mask).float())
+            self.template_update = True
+            #print("update template images")
 
         with torch.no_grad():
-            if self.first_frame:
+            if self.template_update:
                 outputs = self.model(nested_tensor_from_tensor_list([search], [torch.as_tensor(search_mask).float()]),
                                      nested_tensor_from_tensor_list(template_list, template_mask_list))
-                self.first_frame = False
+                self.template_update = False
             else:
-                if len(template_list) == 1:
-                    outputs = self.model(nested_tensor_from_tensor_list([search], [torch.as_tensor(search_mask).float()]))
-                else: # updated multi frame
-                    outputs = self.model(nested_tensor_from_tensor_list([search], [torch.as_tensor(search_mask).float()]),
-                                         nested_tensor_from_tensor_list(template_list, template_mask_list))
+                outputs = self.model(nested_tensor_from_tensor_list([search], [torch.as_tensor(search_mask).float()]))
 
 
         outputs = self.postprocess(outputs)
@@ -282,10 +278,8 @@ class Tracker(object):
                 self.init_best_score = best_score
 
             if best_score > self.init_best_score:
-                self.prev_img_udpate = True
-                self.prev_img = img.copy() # you can comment out this for general tracking
-            else:
-                self.prev_img_udpate = False
+                self.prev_img_update = True
+                self.prev_img = img.copy()
         else:
             bbox = [self.center_pos[0] - self.size[0] / 2, self.center_pos[1] - self.size[1] / 2,
                     self.center_pos[0] + self.size[0] / 2, self.center_pos[1] + self.size[1] / 2]
@@ -293,6 +287,7 @@ class Tracker(object):
             raw_heatmap = (torch.round(raw_heatmap * 255)).detach().numpy().astype(np.uint8)
             post_heatmap = raw_heatmap
             rec_search_image = search_image
+
 
 
         return {
@@ -306,4 +301,4 @@ class Tracker(object):
         }
 
 def build_tracker(model, postprocess, args):
-    return Tracker(model, postprocess, args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.multi_frame)
+    return Tracker(model, postprocess, args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf)
