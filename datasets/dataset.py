@@ -41,13 +41,14 @@ logger = logging.getLogger("global")
 
 
 class SubDataset(object):
-    def __init__(self, path, ann_file, frame_range, num_use, start_idx):
+    def __init__(self, path, ann_file, frame_range, num_use, start_idx, multi_template_num):
 
         self.path = path
         self.ann_file = ann_file
         self.frame_range = frame_range
         self.num_use = num_use
         self.start_idx = start_idx
+        self.multi_template_num = multi_template_num
         logger.info("loading " + self.path)
 
 
@@ -144,14 +145,33 @@ class SubDataset(object):
         track_info = video["tracks"][track]
 
         frames = track_info['frames']
-        template_frame = np.random.randint(0, len(frames))
-        left = max(template_frame - self.frame_range, 0)
-        right = min(template_frame + self.frame_range, len(frames)-1) + 1
-        search_range = frames[left:right]
-        template_frame = frames[template_frame]
-        search_frame = np.random.choice(search_range)
-        return self.get_image_anno(video_name, track, template_frame), \
-            self.get_image_anno(video_name, track, search_frame)
+        template_frame_id = np.random.randint(0, len(frames))
+        template_frame = frames[template_frame_id]
+
+        left = max(template_frame_id - self.frame_range, 0)
+        right = min(template_frame_id + self.frame_range, len(frames)-1) + 1
+        search_frame_id = np.random.randint(left, right)
+        search_frame = frames[search_frame_id]
+        search_frame_info = self.get_image_anno(video_name, track, search_frame)
+
+        #print("template_frame: {}".format(template_frame))
+        template_frame_info_list = [self.get_image_anno(video_name, track, template_frame)]
+        end_frame_id = search_frame_id
+        for i in range(self.multi_template_num - 1):
+            if end_frame_id < template_frame_id:
+                intermediate_frame = np.random.choice(frames[end_frame_id + 1:template_frame_id + 1])
+            elif search_frame_id > template_frame_id:
+                intermediate_frame = np.random.choice(frames[template_frame_id:end_frame_id])
+            else:
+                intermediate_frame = template_frame
+
+            template_frame_info_list.append(self.get_image_anno(video_name, track, intermediate_frame))
+            end_frame_id = intermediate_frame
+            #print("intermediate_frame: {}".format(intermediate_frame))
+
+        #print("search_frame: {}".format(search_frame))
+
+        return template_frame_info_list, search_frame_info
 
     def get_random_target(self, index=-1):
         if index == -1:
@@ -176,7 +196,8 @@ class TrkDataset(Dataset):
                  search_shift, search_scale, search_blur, search_color,
                  exempler_size = 127, search_size = 255,
                  negative_rate = 0.5,
-                 resnet_dilation = []):
+                 resnet_dilation = [],
+                 multi_template_num = 1):
         super(TrkDataset, self).__init__()
 
         self.exempler_size = exempler_size
@@ -194,6 +215,8 @@ class TrkDataset(Dataset):
             if not dilation:
                 stride = stride * 2
         self.output_size = (self.search_size + stride - 1) // stride
+
+        self.multi_template_num = multi_template_num # how many template frames for single search frame
 
         # debug (TODO remove)
         if self.search_size == 255:
@@ -217,7 +240,8 @@ class TrkDataset(Dataset):
                 path, ANN_PATHS[image_set],
                 int(video_frame_range),
                 int(num_use),
-                start)
+                start,
+                multi_template_num)
             start += sub_dataset.num
             self.num += sub_dataset.num_use
 
@@ -323,36 +347,42 @@ class TrkDataset(Dataset):
         neg = self.negative_rate and self.negative_rate > np.random.random()
 
         if neg:
-            template = dataset.get_random_target(index)
-            search = np.random.choice(self.all_dataset).get_random_target()
+            templates_info = [dataset.get_random_target(index) for i in range(self.multi_template_num)]
+            search_info = np.random.choice(self.all_dataset).get_random_target()
         else:
-            template, search = dataset.get_positive_pair(index)
+            templates_info, search_info = dataset.get_positive_pair(index)
 
-        # get image
-        template_image = cv2.imread(template[0])
-        search_image = cv2.imread(search[0])
+        # template augmentation
+        templates = []
+        templates_mask = []
+        for i in range(self.multi_template_num):
+            image = cv2.imread(templates_info[i][0]) # get image
+            box, mask  = self._get_bbox(image, templates_info[i][1], templates_info[i][2])
+            template, _ , mask = self.template_aug(image, box, mask, self.exempler_size)
 
+            # normalize
+            # we have to change to type from float to uint8 for torchvision.transforms.ToTensor
+            # https://pytorch.org/docs/stable/torchvision/transforms.html#torchvision.transforms.ToTensor
+            template = self.normalize(np.round(template).astype(np.uint8))
+            mask = torch.as_tensor(mask)
 
-        # get bounding box
-        template_box, template_mask  = self._get_bbox(template_image, template[1], template[2])
-        search_box, search_mask = self._get_bbox(search_image, search[1], search[2])
+            templates.append(template)
+            templates_mask.append(mask)
 
-        #print("search_box: {}, search_mask: {}".format(search_box, search_mask))
-
-        # augmentation
-        template, _ , template_mask = self.template_aug(template_image,
-                                                        template_box,
-                                                        template_mask,
-                                                        self.exempler_size)
-
+        search_image = cv2.imread(search_info[0])
+        search_box, search_mask = self._get_bbox(search_image, search_info[1], search_info[2])
         search, input_bbox, search_mask = self.search_aug(search_image,
                                                           search_box,
                                                           search_mask,
                                                           self.search_size)
-        #print("after aug search_box: {}, search_mask: {}".format(search_box, search_mask))
+        # normalize
+        # we have to change to type from float to uint8 for torchvision.transforms.ToTensor
+        # https://pytorch.org/docs/stable/torchvision/transforms.html#torchvision.transforms.ToTensor
+        search = self.normalize(np.round(search).astype(np.uint8))
+        search_mask =  torch.as_tensor(search_mask)
+
 
         hm = np.zeros((self.output_size, self.output_size), dtype=np.float32)
-
 
         valid = not neg
         scale = float(self.output_size) / float(self.search_size)
@@ -382,17 +412,9 @@ class TrkDataset(Dataset):
         k = cv2.waitKey(0)
         """
 
-        # normalize
-        # we have to change to type from float to uint8 for torchvision.transforms.ToTensor
-        # https://pytorch.org/docs/stable/torchvision/transforms.html#torchvision.transforms.ToTensor
-        template = self.normalize(np.round(template).astype(np.uint8))
-        search = self.normalize(np.round(search).astype(np.uint8))
-        template_mask = torch.as_tensor(template_mask)
-        search_mask =  torch.as_tensor(search_mask)
-
         target_dict =  {'hm': hm, 'reg': reg, 'wh': wh, 'ind': torch.as_tensor(ind), 'valid': torch.as_tensor(valid), 'bbox_debug': torch.as_tensor(input_bbox)}
 
-        return template, search, template_mask, search_mask, target_dict
+        return templates, search, templates_mask, search_mask, target_dict
 
 def build(image_set, args):
 
@@ -403,12 +425,13 @@ def build(image_set, args):
             args.dataset_num_uses = args.eval_dataset_num_uses
         else:
             args.dataset_num_uses = [-1] * len(args.dataset_num_uses)
-    
+
     dataset = TrkDataset(image_set, args.dataset_paths,
                          args.dataset_video_frame_ranges, args.dataset_num_uses,
                          args.template_aug_shift, args.template_aug_scale, args.template_aug_color,
                          args.search_aug_shift, args.search_aug_scale, args.search_aug_blur, args.search_aug_color,
                          args.exempler_size, args.search_size,
                          args.negative_aug_rate,
-                         args.resnet_dilation)
+                         args.resnet_dilation,
+                         args.multi_template_num)
     return dataset

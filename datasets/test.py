@@ -32,6 +32,7 @@ def get_args_parser():
 
     parser.add_argument('--dataset_video_frame_ranges', default=[100], nargs='+')
     parser.add_argument('--dataset_num_uses', default=[-1], nargs='+')
+    parser.add_argument('--eval_dataset_num_uses', default=[], nargs='+')
     parser.add_argument('--template_aug_shift', default=4, type=int)
     parser.add_argument('--template_aug_scale', default=0.05, type=float)
     parser.add_argument('--template_aug_color', default=1.0, type=float)
@@ -44,6 +45,7 @@ def get_args_parser():
     parser.add_argument('--resnet_dilation', action='store_false',
                         help="If true, we replace stride with dilation in the last convolutional block (DC5)") #defualt is true
     parser.add_argument('--negative_aug_rate', default=0.2, type=float)
+    parser.add_argument('--multi_template_num', default=1, type=int)
 
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
@@ -90,9 +92,10 @@ def main(args):
         print("the len of dataset_train: {}".format(len(dataset_train)))
 
         for i, obj in enumerate(data_loader_train):
-            print("{} iterator has {} batches".format(i, len(obj[2])))
-            targets = [{k: v.to(device) for k, v in t.items()} for t in obj[4]]
+            print("{} iterator has {} batches".format(i, len(obj[-1])))
+            targets = [{k: v.to(device) for k, v in t.items()} for t in obj[-1]]
 
+            multi_frame_num = len(obj[0]) // len(obj[1])
             template_nested_samples = utils.nested_tensor_from_tensor_list(obj[0], obj[2])
             search_nested_samples = utils.nested_tensor_from_tensor_list(obj[1], obj[3])
             template_samples = template_nested_samples.tensors.to(device) # use several time to load to gpu
@@ -110,15 +113,21 @@ def main(args):
                 T.Normalize(0, [1.0 / 255, 1.0 / 255, 1.0 / 255])
             ])
 
-            for batch_i in range(len(obj[2])):
+            for batch_i in range(len(obj[-1])):
 
                 revert_search_image = image_revert(search_samples[batch_i])
                 search_image = revert_search_image.to('cpu').detach().numpy().copy()
                 search_image = (np.round(search_image.transpose(1,2,0))).astype(np.uint8).copy()
 
-                revert_template_image = image_revert(template_samples[batch_i])
-                template_image = revert_template_image.to('cpu').detach().numpy().copy()
-                template_image = (np.round(template_image.transpose(1,2,0))).astype(np.uint8).copy()
+                template_images = []
+                for id in range(multi_frame_num):
+                    revert_template_image = image_revert(template_samples[batch_i * multi_frame_num + id])
+                    template_image = revert_template_image.to('cpu').detach().numpy().copy()
+                    template_image = (np.round(template_image.transpose(1,2,0))).astype(np.uint8).copy()
+
+                    mask = torch.round(obj[2][batch_i * multi_frame_num + id].to('cpu')).int()
+                    cv2.rectangle(template_image, (mask[0], mask[1]), (mask[2], mask[3]), (0,255,0))
+                    template_images.append(template_image)
 
                 output_size = targets[batch_i]["hm"].shape[0]
                 sesarch_size = search_image.shape[0]
@@ -136,10 +145,6 @@ def main(args):
                 cv2.rectangle(search_image, (orig_bbox[0], orig_bbox[1]), (orig_bbox[2], orig_bbox[3]), (0,255,0))
                 cv2.circle(search_image, (np.round(revert_ct[0]), np.round(revert_ct[1])), 2, (0,255,0), -1) # no need
 
-                # draw the mask
-                template_mask = torch.round(obj[2][batch_i].to('cpu')).int()
-                cv2.rectangle(template_image, (template_mask[0], template_mask[1]), (template_mask[2], template_mask[3]), (0,255,0))
-
                 search_mask = torch.round(obj[3][batch_i].to('cpu')).int()
                 cv2.rectangle(search_image, (search_mask[0], search_mask[1]), (search_mask[2], search_mask[3]), (0,255,0))
 
@@ -156,17 +161,18 @@ def main(args):
 
                 cv2.imshow('heatmap', heatmap)
                 cv2.imshow('search_image', search_image)
-                cv2.imshow('template_image', template_image)
+                for i in range(multi_frame_num):
+                    cv2.imshow('template' + str(i+1) + '_image', template_images[i])
+
+                    template_image2 = deepcopy(template_images[i])
+                    template_mask_img = template_masks[batch_i * multi_frame_num + id].to('cpu').detach().numpy()
+                    template_image2[np.repeat(template_mask_img[:, :, np.newaxis], 3, axis=2)] = 0
+                    cv2.imshow('template' + str(i + 1) + '_image_mask', template_image2)
 
                 search_image2 = deepcopy(search_image)
                 search_mask_img = search_masks[batch_i].to('cpu').detach().numpy()
                 search_image2[np.repeat(search_mask_img[:, :, np.newaxis], 3, axis=2)] = 0
                 cv2.imshow('search_image_mask', search_image2)
-
-                template_image2 = deepcopy(template_image)
-                template_mask_img = template_masks[batch_i].to('cpu').detach().numpy()
-                template_image2[np.repeat(template_mask_img[:, :, np.newaxis], 3, axis=2)] = 0
-                cv2.imshow('template_image_mask', template_image2)
 
                 k = cv2.waitKey(0)
 

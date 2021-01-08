@@ -11,6 +11,7 @@ from collections import defaultdict, deque
 import datetime
 import pickle
 from typing import Optional, List
+import itertools
 
 import torch
 import torch.nn.functional as F
@@ -268,10 +269,12 @@ def get_sha():
 
 def collate_fn(batch):
     # batch: a list (batch_size) of dictionally from dataset.__item__
-    batch = list(zip(*batch)) # batch = [(3, h_temp, w_temp) x bn, (3, h_serch, w_serch) x bn, (target_dict) x bn]
+    batch = list(zip(*batch)) # batch = [[(3, h_temp, w_temp), (3, h_temp, w_temp)] x bn, (3, h_search, w_search) x bn, (h_template, w_template) x bn, (h_search, w_search) x bn, (target_dict) x bn]
 
-    # batch[0] = nested_tensor_from_tensor_list(batch[0]) # template
-    # batch[1] = nested_tensor_from_tensor_list(batch[1]) # search
+    if isinstance(batch[0][-1], list): # flatten template if necessary
+        assert isinstance(batch[2][-1], list) and len(batch[2][-1]) == len(batch[0][-1])
+        batch[0] = list(itertools.chain.from_iterable(batch[0]))
+        batch[2] = list(itertools.chain.from_iterable(batch[2]))
 
     return tuple(batch)
 
