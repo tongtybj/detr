@@ -28,7 +28,8 @@ class TRTR(nn.Module):
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
-        self.transformer = nn.ModuleList([copy.deepcopy(transformer) for i in backbone.num_channels_list]) # multiple for layer-wise backbone output
+        self.transformer_heatmap = nn.ModuleList([copy.deepcopy(transformer) for i in backbone.num_channels_list]) # multiple heamtmap transformer for layer-wise backbone output
+        self.transformer_bbox = nn.ModuleList([copy.deepcopy(transformer) for i in backbone.num_channels_list]) # multiple bbox transformer for layer-wise backbone output
 
         hidden_dim = transformer.d_model
 
@@ -39,15 +40,18 @@ class TRTR(nn.Module):
         self.heatmap_embed = nn.Linear(backbone_layer_num * hidden_dim, 1)
         self.heatmap_embed.bias.data.fill_(-2.19)
 
-        self.input_projs = nn.ModuleList([nn.Conv2d(num_channels, hidden_dim, kernel_size=1) for num_channels in backbone.num_channels_list])
+        self.heatmap_input_projs = nn.ModuleList([nn.Conv2d(num_channels, hidden_dim, kernel_size=1) for num_channels in backbone.num_channels_list])
+        self.bbox_input_projs = nn.ModuleList([nn.Conv2d(num_channels, hidden_dim, kernel_size=1) for num_channels in backbone.num_channels_list])
 
         self.backbone = backbone
         self.aux_loss = aux_loss
 
-        self.template_src_projs = []
+        self.template_heatmap_src_projs = []
+        self.template_bbox_src_projs = []
         self.template_mask = None
         self.template_pos = None
-        self.memory = []
+        self.heatmap_memory = []
+        self.bbox_memory = []
 
         self.transformer_mask = transformer_mask
 
@@ -92,12 +96,15 @@ class TRTR(nn.Module):
             if self.transformer_mask:
                 self.template_mask = template_features[-1].mask
 
+            self.template_heatmap_src_projs = []
+            self.template_bbox_src_projs = []
 
-            self.template_src_projs = []
-            for input_proj, template_feature in zip(self.input_projs, template_features):
-                self.template_src_projs.append(input_proj(template_feature.tensors))
+            for heatmap_input_proj, bbox_input_proj, template_feature in zip(self.heatmap_input_projs, self.bbox_input_projs, template_features):
+                self.template_heatmap_src_projs.append(heatmap_input_proj(template_feature.tensors))
+                self.template_bbox_src_projs.append(bbox_input_proj(template_feature.tensors))
 
-            self.memory = []
+            self.heatmap_memory = []
+            self.bbox_memory = []
             # print("backbone template mask: {}".format(self.template_mask))
 
         start = time.time()
@@ -110,34 +117,47 @@ class TRTR(nn.Module):
         #torch.set_printoptions(profile="full")
         #print("backbone search mask: {}".format(search_mask))
 
-        search_src_projs = []
-        for input_proj, search_feature in zip(self.input_projs, search_features):
-            search_src_projs.append(input_proj(search_feature.tensors))
+        search_heatmap_src_projs = []
+        search_bbox_src_projs = []
+        for heatmap_input_proj, bbox_input_proj, search_feature in zip(self.heatmap_input_projs, self.bbox_input_projs, search_features):
+            search_heatmap_src_projs.append(heatmap_input_proj(search_feature.tensors))
+            search_bbox_src_projs.append(bbox_input_proj(search_feature.tensors))
 
 
-        hs_list = []
-        for i, (template_src_proj, search_src_proj, transformer) in enumerate(zip(self.template_src_projs, search_src_projs, self.transformer)):
+        ## heatmap
+        heatmap_hs_list = []
+        for i, (template_src_proj, search_src_proj, transformer) in enumerate(zip(self.template_heatmap_src_projs, search_heatmap_src_projs, self.transformer_heatmap)):
             if template_samples is not None:
                 hs, memory = transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1])
-                self.memory.append(memory)
+                self.heatmap_memory.append(memory)
             else:
-                hs = transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1], self.memory[i])[0]
+                hs = transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1], self.heatmap_memory[i])[0]
 
-            hs_list.append(hs)
+            heatmap_hs_list.append(hs)
 
-        concat_hs = torch.cat(hs_list, -1)
+        concat_hs = torch.cat(heatmap_hs_list, -1)
+        outputs_heatmap = self.heatmap_embed(concat_hs) # we have different sigmoid process for training and inference, so we do not get sigmoid here.
 
+        ### bbox 
+        bbox_hs_list = []
+        for i, (template_src_proj, search_src_proj, transformer) in enumerate(zip(self.template_bbox_src_projs, search_bbox_src_projs, self.transformer_bbox)):
+            if template_samples is not None:
+                hs, memory = transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1])
+                self.bbox_memory.append(memory)
+            else:
+                hs = transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1], self.bbox_memory[i])[0]
+
+            bbox_hs_list.append(hs)
+
+        concat_hs = torch.cat(bbox_hs_list, -1)
         hs_bbox = self.bbox_embed(concat_hs)
-        hs_hm = self.heatmap_embed(concat_hs)
-
-        outputs_heatmap = hs_hm  # we have different sigmoid process for training and inference, so we do not get sigmoid here.
-
         # TODO: whether can you sigmoid() for the offset regression,
         # YoLo V3 uses sigmoid: https://blog.paperspace.com/how-to-implement-a-yolo-object-detector-in-pytorch/
         outputs_bbox = hs_bbox.sigmoid()
         outputs_bbox_reg = outputs_bbox.split(2,-1)[0]
         outputs_bbox_wh = outputs_bbox.split(2,-1)[1]
 
+        ### search mask (transformer mask)
         search_mask = search_features[-1].mask.flatten(1).unsqueeze(-1) # [bn, output_hegiht *  output_width, 1]
 
         out = {'pred_heatmap': outputs_heatmap[-1], 'pred_bbox_reg': outputs_bbox_reg[-1], 'pred_bbox_wh': outputs_bbox_wh[-1], 'search_mask': search_mask}
