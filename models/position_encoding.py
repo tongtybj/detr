@@ -35,7 +35,7 @@ class PositionEmbeddingSine(nn.Module):
         mask = tensor_list.mask
         assert mask is not None
         not_mask = ~mask
-        #not_mask = torch.ones(tensor_list.mask.shape, device = tensor_list.mask.device) # Adding position embedding to maks area (average padding area) will degrade the performance
+        not_mask = torch.ones(tensor_list.mask.shape, device = tensor_list.mask.device) # Adding position embedding to maks area (average padding area) will degrade the performance
         # Note: can not use different model between training and inference
         y_embed = not_mask.cumsum(1, dtype=torch.float32)
         x_embed = not_mask.cumsum(2, dtype=torch.float32)
