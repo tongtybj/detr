@@ -54,7 +54,8 @@ def get_args_parser():
                         help="Number of attention heads inside the transformer's attentions")
     parser.add_argument('--num_queries', default=100, type=int,
                         help="Number of query slots")
-    parser.add_argument('--pre_norm', action='store_true')
+    parser.add_argument('--encoder_feedforward', action='store_true')
+    parser.add_argument('--decoder_feedforward', action='store_false') # TODO: not good
     parser.add_argument('--return_layers', default=[], nargs='+')
     parser.add_argument('--weighted', action='store_true',
                         help="the weighted for the multiple input embedding for transformer")

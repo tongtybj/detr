@@ -1,11 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 """
 TRTR Transformer class.
-
-Copy from DETR, whish has following modification compared to original transformer (torch.nn.Transformer):
-    * positional encodings are passed in MHattention
-    * extra LN at the end of encoder is removed
-    * decoder returns a stack of activations from all decoding layers
 """
 import copy
 from typing import Optional, List
@@ -13,25 +8,37 @@ from typing import Optional, List
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
+from torch.nn.init import xavier_uniform_, constant_
+
 
 class Transformer(nn.Module):
 
-    def __init__(self, d_model=512, nhead=8, num_encoder_layers=6,
-                 num_decoder_layers=6, dim_feedforward=2048, dropout=0.1,
-                 activation="relu", normalize_before=False,
-                 return_intermediate_dec=False):
+    def __init__(self, d_model=512, nhead=8, dim_feedforward=2048, dropout=0.1, encoder_feedforward = False, decoder_feedforward = True, activation="relu"):
         super().__init__()
 
-        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
-                                                dropout, activation, normalize_before)
-        encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
-        self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+        # shared self attention module
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
 
-        decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
-                                                dropout, activation, normalize_before)
-        decoder_norm = nn.LayerNorm(d_model)
-        self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
-                                          return_intermediate=return_intermediate_dec)
+        # self-attention post norm
+        self.self_attn_post_skip_connect = SkipConnection(d_model, dropout)
+
+        # feedforward module after self attention
+        self.encoder_feedforward = encoder_feedforward
+        if self.encoder_feedforward:
+            self.self_attn_post_feedforward = FeedForwardModule(d_model, dim_feedforward = dim_feedforward,
+                                                                dropout = dropout, activation = activation)
+
+        # encoder-decoder attention module
+        self.decoder_attn = ModifiedMultiheadAttention(d_model, nhead, dropout=dropout)
+
+        # encoder-decoder attention post norm
+        self.decoder_attn_post_skip_connect = SkipConnection(d_model, dropout)
+
+        # feedforward module after encoder-decoder attention
+        self.decoder_feedforward = decoder_feedforward
+        if self.decoder_feedforward:
+            self.decoder_attn_post_feedforward = FeedForwardModule(d_model, dim_feedforward = dim_feedforward,
+                                                                   dropout = dropout, activation = activation)
 
         self._reset_parameters()
 
@@ -42,6 +49,9 @@ class Transformer(nn.Module):
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
+
+    def with_pos_embed(self, tensor, pos: Optional[Tensor]):
+        return tensor if pos is None else tensor + pos
 
     def forward(self, template_src, template_mask, template_pos_embed, search_src, search_mask, search_pos_embed, memory = None):
         """
@@ -54,45 +64,152 @@ class Transformer(nn.Module):
         search_pos_embed: [batch_size x hidden_dim x H_search x W_search]
         """
 
-        if len(template_src) > 1 and len(search_src) == 1:
-            # print("do multiple frame mode ")
-            template_src = template_src.flatten(2) # flatten: bNxCxHxW to bNxCxHW
-            template_src = torch.cat(torch.split(template_src,1), -1) # concat: bNxCxHW to 1xCxbNHW
-            template_src = template_src.permute(2, 0, 1) # permute 1xCxbNHW to bNHWx1xC for encoder in transformer
-
-            template_pos_embed = template_pos_embed.flatten(2) # flatten: bNxCxHxW to bNxCxHW
-            template_pos_embed = torch.cat(torch.split(template_pos_embed,1), -1) # concat: bNxCxHW to 1xCxbNHW
-            template_pos_embed = template_pos_embed.permute(2, 0, 1) # permute 1xCxbNHW to bNHWx1xC for encoder in transformer
-
-            if template_mask is not None:
-                template_mask = template_mask.flatten(1) # flatten: bNxHxW to bNxHW
-                template_mask = torch.cat(torch.split(template_mask,1), -1) # concat: bNxHW to 1xbNHW
-
-        else:
-            # flatten and permute bNxCxHxW to HWxbNxC for encoder in transformer
-            template_src = template_src.flatten(2).permute(2, 0, 1)
-            template_pos_embed = template_pos_embed.flatten(2).permute(2, 0, 1)
-            if template_mask is not None:
-                template_mask = template_mask.flatten(1)
-
+        # flatten and permute bNxCxHxW to HWxbNxC for encoder in transformer
+        template_src = template_src.flatten(2).permute(2, 0, 1)
+        template_pos_embed = template_pos_embed.flatten(2).permute(2, 0, 1)
+        if template_mask is not None:
+            template_mask = template_mask.flatten(1)
 
         # encoding the template embedding with positional embbeding
         if memory is None:
-            memory = self.encoder(template_src, src_key_padding_mask=template_mask, pos=template_pos_embed)
+            q = k = self.with_pos_embed(template_src, template_pos_embed)
+            memory, attn_weight_map = self.self_attn(q, k, value=template_src,
+                                                     key_padding_mask=template_mask)
+            memory = self.self_attn_post_skip_connect(template_src, memory)
+            if self.encoder_feedforward:
+                memory = self.self_attn_post_feedforward(memory)
+
 
         # flatten and permute bNxCxHxW to HWxbNxC for decoder in transformer
         search_src = search_src.flatten(2).permute(2, 0, 1) # tgt
         search_pos_embed = search_pos_embed.flatten(2).permute(2, 0, 1)
-        if template_mask is not None:
+        if search_mask is not None:
             search_mask = search_mask.flatten(1)
 
-        hs = self.decoder(search_src, memory,
-                          memory_key_padding_mask=template_mask,
-                          tgt_key_padding_mask=search_mask,
-                          encoder_pos=template_pos_embed,
-                          decoder_pos=search_pos_embed)
+        q = k = self.with_pos_embed(search_src, search_pos_embed)
+        search_query, attn_weight_map = self.self_attn(q, k, value=search_src,
+                                                        key_padding_mask=search_mask)
+        search_query = self.self_attn_post_skip_connect(search_src, search_query)
+        if self.encoder_feedforward:
+            search_query = self.self_attn_post_feedforward(search_query)
 
-        return hs.transpose(1, 2), memory
+        tgt, attn_weight_map = self.decoder_attn(query=self.with_pos_embed(search_query, search_pos_embed),
+                                                 key=self.with_pos_embed(memory, template_pos_embed),
+                                                 value=memory,
+                                                 key_padding_mask=template_mask)
+        tgt = self.decoder_attn_post_skip_connect(search_query, tgt)
+        if self.decoder_feedforward:
+            tgt = self.decoder_attn_post_feedforward(tgt)
+
+        return tgt.unsqueeze(0).transpose(1, 2), memory
+
+class SkipConnection(nn.Module):
+
+    def __init__(self, d_model, dropout = 0.1):
+        super().__init__()
+
+        self.norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, src, src2):
+        src = src + self.dropout(src2)
+        src = self.norm(src)
+        return src
+
+class FeedForwardModule(nn.Module):
+
+    def __init__(self, d_model, dim_feedforward=2048, dropout=0.1, activation="relu"):
+        super().__init__()
+
+        # Implementation of Feedforward model
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.activation = _get_activation_fn(activation)
+
+        self.skip_connect = SkipConnection(d_model, dropout)
+
+    def forward(self, src):
+        src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
+        src = self.skip_connect(src, src2)
+        return src
+
+class ModifiedMultiheadAttention(nn.Module):
+    r"""Allows the model to jointly attend to information
+    from different representation subspaces.
+    See reference: Attention Is All You Need
+
+    Modified: give the same weight for key and query
+
+    .. math::
+        \text{MultiHead}(Q, K, V) = \text{Concat}(head_1,\dots,head_h)W^O
+        \text{where} head_i = \text{Attention}(QW_i^Q, KW_i^K, VW_i^V)
+
+    Args:
+        embed_dim: total dimension of the model.
+        num_heads: parallel attention heads.
+        dropout: a Dropout layer on attn_output_weights. Default: 0.0.
+    Examples::
+
+        >>> multihead_attn = nn.MultiheadAttention(embed_dim, num_heads)
+        >>> attn_output, attn_output_weights = multihead_attn(query, key, value)
+    """
+
+    def __init__(self, embed_dim, num_heads, dropout=0.):
+        super(ModifiedMultiheadAttention, self).__init__()
+        self.embed_dim = embed_dim
+
+        self.num_heads = num_heads
+        self.dropout = dropout
+        self.head_dim = embed_dim // num_heads
+        assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
+
+
+        self.qk_proj_weight = nn.Parameter(torch.Tensor(embed_dim, embed_dim)) # use the shared weight for query and key
+        self.v_proj_weight = nn.Parameter(torch.Tensor(embed_dim, embed_dim))
+        self.register_parameter('in_proj_weight', None)
+
+        self.in_qk_proj_bias = nn.Parameter(torch.empty(embed_dim))
+        self.in_v_proj_bias = nn.Parameter(torch.empty(embed_dim))
+
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+
+        self.bias_k = self.bias_v = None
+        self.add_zero_attn = None
+
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        xavier_uniform_(self.qk_proj_weight)
+        xavier_uniform_(self.v_proj_weight)
+
+        constant_(self.in_qk_proj_bias, 0.)
+        constant_(self.in_v_proj_bias, 0.)
+        constant_(self.out_proj.bias, 0.)
+
+    def __setstate__(self, state):
+        # Support loading old MultiheadAttention checkpoints generated by v1.1.0
+        if '_qkv_same_embed_dim' not in state:
+            state['_qkv_same_embed_dim'] = True
+
+        super(ModifiedMultiheadAttention, self).__setstate__(state)
+
+    def forward(self, query, key, value, key_padding_mask=None,
+                need_weights=True, attn_mask=None):
+
+        in_proj_bias = torch.cat([self.in_qk_proj_bias, self.in_qk_proj_bias, self.in_v_proj_bias])
+        return F.multi_head_attention_forward(
+            query, key, value, self.embed_dim, self.num_heads,
+            self.in_proj_weight, in_proj_bias,
+            self.bias_k, self.bias_v, self.add_zero_attn,
+            self.dropout, self.out_proj.weight, self.out_proj.bias,
+            training=self.training,
+            key_padding_mask=key_padding_mask, need_weights=need_weights,
+            attn_mask=attn_mask,
+            use_separate_proj_weight=True,
+            q_proj_weight=self.qk_proj_weight,
+            k_proj_weight=self.qk_proj_weight,
+            v_proj_weight=self.v_proj_weight)
 
 
 class TransformerEncoder(nn.Module):
@@ -117,7 +234,6 @@ class TransformerEncoder(nn.Module):
             output = self.norm(output)
 
         return output
-
 
 class TransformerDecoder(nn.Module):
 
@@ -179,9 +295,6 @@ class TransformerEncoderLayer(nn.Module):
 
         self.activation = _get_activation_fn(activation)
         self.normalize_before = normalize_before
-
-    def with_pos_embed(self, tensor, pos: Optional[Tensor]):
-        return tensor if pos is None else tensor + pos
 
     def forward_post(self,
                      src,
@@ -323,10 +436,8 @@ def build_transformer(args):
         dropout=args.dropout,
         nhead=args.nheads,
         dim_feedforward=args.dim_feedforward,
-        num_encoder_layers=args.enc_layers,
-        num_decoder_layers=args.dec_layers,
-        normalize_before=args.pre_norm,
-        return_intermediate_dec=True,
+        encoder_feedforward = args.encoder_feedforward,
+        decoder_feedforward = args.decoder_feedforward
     )
 
 
