@@ -40,9 +40,9 @@ def get_args_parser():
 
     # * Transformer
     parser.add_argument('--use_default_transformer', action='store_true')
-    parser.add_argument('--enc_layers', default=6, type=int,
+    parser.add_argument('--enc_layers', default=1, type=int,
                         help="Number of encoding layers in the transformer")
-    parser.add_argument('--dec_layers', default=6, type=int,
+    parser.add_argument('--dec_layers', default=1, type=int,
                         help="Number of decoding layers in the transformer")
     parser.add_argument('--pre_norm', action='store_true')
     parser.add_argument('--dim_feedforward', default=2048, type=int,
