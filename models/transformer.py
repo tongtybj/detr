@@ -11,7 +11,7 @@ from torch import nn, Tensor
 from torch.nn.init import xavier_uniform_, constant_
 
 
-class Transformer(nn.Module):
+class SharedEncoderTransformer(nn.Module):
 
     def __init__(self, d_model=512, nhead=8, dim_feedforward=2048, dropout=0.1, encoder_feedforward = False, decoder_feedforward = True, activation="relu"):
         super().__init__()
@@ -212,6 +212,87 @@ class ModifiedMultiheadAttention(nn.Module):
             v_proj_weight=self.v_proj_weight)
 
 
+class DefaultTransformer(nn.Module):
+
+    def __init__(self, d_model=512, nhead=8, num_encoder_layers=6,
+                 num_decoder_layers=6, dim_feedforward=2048, dropout=0.1,
+                 activation="relu", normalize_before=False,
+                 return_intermediate_dec=False):
+        super().__init__()
+
+        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward,
+                                                dropout, activation, normalize_before)
+        encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
+        self.encoder = TransformerEncoder(encoder_layer, num_encoder_layers, encoder_norm)
+
+        decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward,
+                                                dropout, activation, normalize_before)
+        decoder_norm = nn.LayerNorm(d_model)
+        self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
+                                          return_intermediate=return_intermediate_dec)
+
+        self._reset_parameters()
+
+        self.d_model = d_model
+        self.nhead = nhead
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, template_src, template_mask, template_pos_embed, search_src, search_mask, search_pos_embed, memory = None):
+        """
+        template_src: [batch_size x hidden_dim x H_template x W_template]
+        template_mask: [batch_size x H_template x W_template]
+        template_pos_embed: [batch_size x hidden_dim x H_template x W_template]
+
+        search_src: [batch_size x hidden_dim x H_search x W_search]
+        search_mask: [batch_size x H_search x W_search]
+        search_pos_embed: [batch_size x hidden_dim x H_search x W_search]
+        """
+
+        if len(template_src) > 1 and len(search_src) == 1:
+            # print("do multiple frame mode ")
+            template_src = template_src.flatten(2) # flatten: bNxCxHxW to bNxCxHW
+            template_src = torch.cat(torch.split(template_src,1), -1) # concat: bNxCxHW to 1xCxbNHW
+            template_src = template_src.permute(2, 0, 1) # permute 1xCxbNHW to bNHWx1xC for encoder in transformer
+
+            template_pos_embed = template_pos_embed.flatten(2) # flatten: bNxCxHxW to bNxCxHW
+            template_pos_embed = torch.cat(torch.split(template_pos_embed,1), -1) # concat: bNxCxHW to 1xCxbNHW
+            template_pos_embed = template_pos_embed.permute(2, 0, 1) # permute 1xCxbNHW to bNHWx1xC for encoder in transformer
+
+            if template_mask is not None:
+                template_mask = template_mask.flatten(1) # flatten: bNxHxW to bNxHW
+                template_mask = torch.cat(torch.split(template_mask,1), -1) # concat: bNxHW to 1xbNHW
+
+        else:
+            # flatten and permute bNxCxHxW to HWxbNxC for encoder in transformer
+            template_src = template_src.flatten(2).permute(2, 0, 1)
+            template_pos_embed = template_pos_embed.flatten(2).permute(2, 0, 1)
+            if template_mask is not None:
+                template_mask = template_mask.flatten(1)
+
+
+        # encoding the template embedding with positional embbeding
+        if memory is None:
+            memory = self.encoder(template_src, src_key_padding_mask=template_mask, pos=template_pos_embed)
+
+        # flatten and permute bNxCxHxW to HWxbNxC for decoder in transformer
+        search_src = search_src.flatten(2).permute(2, 0, 1) # tgt
+        search_pos_embed = search_pos_embed.flatten(2).permute(2, 0, 1)
+        if template_mask is not None:
+            search_mask = search_mask.flatten(1)
+
+        hs = self.decoder(search_src, memory,
+                          memory_key_padding_mask=template_mask,
+                          tgt_key_padding_mask=search_mask,
+                          encoder_pos=template_pos_embed,
+                          decoder_pos=search_pos_embed)
+
+        return hs.transpose(1, 2), memory
+
+
 class TransformerEncoder(nn.Module):
 
     def __init__(self, encoder_layer, num_layers, norm=None):
@@ -234,6 +315,7 @@ class TransformerEncoder(nn.Module):
             output = self.norm(output)
 
         return output
+
 
 class TransformerDecoder(nn.Module):
 
@@ -295,6 +377,9 @@ class TransformerEncoderLayer(nn.Module):
 
         self.activation = _get_activation_fn(activation)
         self.normalize_before = normalize_before
+
+    def with_pos_embed(self, tensor, pos: Optional[Tensor]):
+        return tensor if pos is None else tensor + pos
 
     def forward_post(self,
                      src,
@@ -431,14 +516,28 @@ def _get_clones(module, N):
 
 
 def build_transformer(args):
-    return Transformer(
-        d_model=args.hidden_dim,
-        dropout=args.dropout,
-        nhead=args.nheads,
-        dim_feedforward=args.dim_feedforward,
-        encoder_feedforward = args.encoder_feedforward,
-        decoder_feedforward = args.decoder_feedforward
-    )
+
+    if args.use_default_transformer:
+        return DefaultTransformer(
+            d_model=args.hidden_dim,
+            dropout=args.dropout,
+            nhead=args.nheads,
+            dim_feedforward=args.dim_feedforward,
+            num_encoder_layers=args.enc_layers,
+            num_decoder_layers=args.dec_layers,
+            normalize_before=args.pre_norm,
+            return_intermediate_dec=True,
+        )
+    else:
+        return SharedEncoderTransformer(
+            d_model=args.hidden_dim,
+            dropout=args.dropout,
+            nhead=args.nheads,
+            dim_feedforward=args.dim_feedforward,
+            encoder_feedforward = args.encoder_feedforward,
+            decoder_feedforward = args.decoder_feedforward
+        )
+
 
 
 def _get_activation_fn(activation):
