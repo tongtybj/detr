@@ -16,10 +16,10 @@ from glob import glob
 
 sys.path.append('..')
 from util.box_ops import get_axis_aligned_bbox
-from models import build_model
-from models.tracker import build_tracker
 from toolkit.datasets import DatasetFactory
 from toolkit.utils.region import vot_overlap, vot_float2str
+
+from models.tracker import build_tracker
 
 def get_args_parser():
     parser = argparse.ArgumentParser('benchmark dataset inference', add_help=False)
@@ -39,9 +39,9 @@ def get_args_parser():
                         help="Type of positional embedding to use on top of the image features")
 
     # * Transformer
-    parser.add_argument('--enc_layers', default=6, type=int,
+    parser.add_argument('--enc_layers', default=1, type=int,
                         help="Number of encoding layers in the transformer")
-    parser.add_argument('--dec_layers', default=6, type=int,
+    parser.add_argument('--dec_layers', default=1, type=int,
                         help="Number of decoding layers in the transformer")
     parser.add_argument('--dim_feedforward', default=2048, type=int,
                         help="Intermediate size of the feedforward layers in the transformer blocks")
@@ -103,6 +103,8 @@ def get_args_parser():
 
     parser.add_argument('--result_path', default='results', type=str)
 
+    parser.add_argument('--external_tracker', default="", type=str)
+
     return parser
 
 
@@ -157,12 +159,6 @@ def main(args, tracker):
                                  pred_bbox[2] - pred_bbox[0],
                                  pred_bbox[3] - pred_bbox[1]]
 
-                    template_image = outputs['template_image']
-                    prev_template_image = outputs['prev_template_image']
-                    search_image = outputs['search_image']
-                    raw_heatmap = outputs['raw_heatmap']
-                    post_heatmap = outputs['post_heatmap']
-
                     overlap = vot_overlap(pred_bbox, gt_bbox, (img.shape[1], img.shape[0]))
                     if overlap > 0:
                         # not lost
@@ -183,12 +179,11 @@ def main(args, tracker):
                             cv2.putText(img, 'lost', (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                             cv2.imshow(video.name, img)
 
-                            cv2.imshow("template", template_image)
-                            cv2.imshow("search_raw", search_image)
-                            cv2.imshow("raw_heatmap", raw_heatmap)
-                            cv2.imshow("post_heatmap", post_heatmap)
-                            if prev_template_image is not None:
-                                cv2.imshow("prev_template", prev_template_image)
+                            debug_images = ['template_image', 'prev_template_image', 'search_image', 'raw_heatmap', 'post_heatmap']
+                            for image in debug_images:
+                                if image in outputs and outputs[image] is not None:
+                                    cv2.imshow(image, outputs[image])
+
                             k = cv2.waitKey(0)
                             if k == 27:         # wait for ESC key to exit
                                 sys.exit()
@@ -211,12 +206,10 @@ def main(args, tracker):
 
                     if args.debug_vis:
 
-                        cv2.imshow("template", template_image)
-                        cv2.imshow("search_raw", search_image)
-                        cv2.imshow("raw_heatmap", raw_heatmap)
-                        cv2.imshow("post_heatmap", post_heatmap)
-                        if prev_template_image is not None:
-                            cv2.imshow("prev_template", prev_template_image)
+                        debug_images = ['template_image', 'prev_template_image', 'search_image', 'raw_heatmap', 'post_heatmap']
+                        for image in debug_images:
+                            if image in outputs and outputs[image] is not None:
+                                cv2.imshow(image, outputs[image])
                         k = cv2.waitKey(0)
                         if k == 27:         # wait for ESC key to exit
                             sys.exit()
@@ -276,11 +269,7 @@ def main(args, tracker):
                                  pred_bbox_[3] - pred_bbox_[1]]
                     pred_bboxes.append(pred_bbox)
                     scores.append(outputs['score'])
-                    template_image = outputs['template_image']
-                    prev_template_image = outputs['prev_template_image']
-                    search_image = outputs['search_image']
-                    raw_heatmap = outputs['raw_heatmap']
-                    post_heatmap = outputs['post_heatmap']
+
                 toc += cv2.getTickCount() - tic
                 track_times.append((cv2.getTickCount() - tic)/cv2.getTickFrequency())
                 if idx == 0:
@@ -297,12 +286,11 @@ def main(args, tracker):
                     cv2.imshow(video.name, img)
 
                     if args.debug_vis:
-                        cv2.imshow("template", template_image)
-                        cv2.imshow("search_raw", search_image)
-                        cv2.imshow("raw_heatmap", raw_heatmap)
-                        cv2.imshow("post_heatmap", post_heatmap)
-                        if prev_template_image is not None:
-                            cv2.imshow("prev_template", prev_template_image)
+                        debug_images = ['template_image', 'prev_template_image', 'search_image', 'raw_heatmap', 'post_heatmap']
+                        for image in debug_images:
+                            if image in outputs and outputs[image] is not None:
+                                cv2.imshow(image, outputs[image])
+
                         k = cv2.waitKey(0)
                         if k == 27:         # wait for ESC key to exit
                             sys.exit()
@@ -362,18 +350,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # create tracker
-    if not torch.cuda.is_available():
-        raise ValueError("CUDA is not available in Pytorch")
-
-    device = torch.device('cuda')
-
-    assert args.transformer_mask # should be True
-    model, criterion, postprocessors = build_model(args)
-
-    checkpoint = torch.load(args.checkpoint, map_location='cpu')
-    assert 'model' in checkpoint
-    model.load_state_dict(checkpoint['model'])
-    model.to(device)
-    tracker = build_tracker(model, postprocessors["bbox"], args)
+    tracker = build_tracker(args)
 
     main(args, tracker)

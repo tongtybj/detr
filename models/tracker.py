@@ -11,10 +11,12 @@ import torch.nn.functional as F
 import torchvision.transforms as T
 import datasets.utils
 from datasets.utils import crop_image, siamfc_like_scale, get_exemplar_size, get_context_amount # TODO: move to utils
+from external_tracker import build_external_tracker
 from util.box_ops import box_cxcywh_to_xyxy
 from util.misc import is_dist_avail_and_initialized, nested_tensor_from_tensor_list
 import cv2
 import time
+from models import build_model
 
 class Tracker(object):
     def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf, multi_frame):
@@ -305,5 +307,21 @@ class Tracker(object):
             'prev_template_image': self.prev_rect_template_image # debug
         }
 
-def build_tracker(model, postprocess, args):
-    return Tracker(model, postprocess, args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.multi_frame)
+def build_tracker(args):
+    if args.external_tracker:
+        return build_external_tracker(args)
+    else:
+        if not torch.cuda.is_available():
+            raise ValueError("CUDA is not available in Pytorch")
+
+        device = torch.device('cuda')
+
+        assert args.transformer_mask # should be True
+        model, _, postprocessors = build_model(args)
+
+        checkpoint = torch.load(args.checkpoint, map_location='cpu')
+        assert 'model' in checkpoint
+        model.load_state_dict(checkpoint['model'])
+        model.to(device)
+
+        return Tracker(model, postprocessors["bbox"], args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.multi_frame)
