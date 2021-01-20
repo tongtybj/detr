@@ -10,8 +10,6 @@ import cv2
 import torch
 import numpy as np
 from glob import glob
-
-from models import build_model
 from models.tracker import build_tracker
 
 torch.set_num_threads(1)
@@ -36,9 +34,9 @@ def get_args_parser():
                         help="Type of positional embedding to use on top of the image features")
 
     # * Transformer
-    parser.add_argument('--enc_layers', default=6, type=int,
+    parser.add_argument('--enc_layers', default=1, type=int,
                         help="Number of encoding layers in the transformer")
-    parser.add_argument('--dec_layers', default=6, type=int,
+    parser.add_argument('--dec_layers', default=1, type=int,
                         help="Number of decoding layers in the transformer")
     parser.add_argument('--dim_feedforward', default=2048, type=int,
                         help="Intermediate size of the feedforward layers in the transformer blocks")
@@ -91,6 +89,8 @@ def get_args_parser():
     parser.add_argument('--tracking_size_lpf', default=0.33, type=float,
                         help='the factor of the lpf for size tracking')
 
+    parser.add_argument('--external_tracker', default="", type=str)
+
     return parser
 
 
@@ -128,21 +128,9 @@ def get_frames(video_name):
 
 
 def main(args):
-    if not torch.cuda.is_available():
-        raise ValueError("CUDA is not available in Pytorch")
 
-    device = torch.device('cuda')
-
-    # create model
-    assert args.transformer_mask # should be True
-    model, criterion, postprocessors = build_model(args)
-
-    # load model
-    checkpoint = torch.load(args.checkpoint, map_location='cpu')
-    assert 'model' in checkpoint
-    model.load_state_dict(checkpoint['model'])
-    model.to(device)
-    tracker = build_tracker(model, postprocessors["bbox"], args)
+    # create tracker
+    tracker = build_tracker(args)
 
     first_frame = True
     if args.video_name:
@@ -170,12 +158,12 @@ def main(args):
         print("the tracking score: {}, box: {}".format(output["score"], bbox))
         cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]),
                       (0, 255, 0), 3)
-
-        cv2.imshow("template", output["template_image"])
-        cv2.imshow("search_raw", output["search_image"])
-        cv2.imshow("raw_heatmap", output["raw_heatmap"])
-        cv2.imshow("post_heatmap", output["post_heatmap"])
         cv2.imshow("result", frame)
+
+        debug_images = ["template_image", "search_image", "raw_heatmap", "post_heatmap"]
+        for image in debug_images:
+            if image in output:
+                cv2.imshow(image, output[image])
 
         k = cv2.waitKey(0)
         #k = cv2.waitKey(40)
