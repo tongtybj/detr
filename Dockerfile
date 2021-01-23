@@ -14,3 +14,6 @@ RUN pip --no-cache-dir install -r /workspace/requirements.txt
 
 # hack for dlbox 
 RUN pip install torch==1.5.1+cu92 torchvision==0.6.1+cu92 -f https://download.pytorch.org/whl/torch_stable.html
+
+# install vot-toolkit-python
+RUN pip install git+https://github.com/votchallenge/vot-toolkit-python
