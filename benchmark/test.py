@@ -181,7 +181,7 @@ def main(args, tracker):
                             cv2.putText(img, 'lost', (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                             cv2.imshow(video.name, img)
 
-                            debug_images = ['template_image', 'prev_template_image', 'search_image', 'raw_heatmap', 'post_heatmap']
+                            debug_images = ['template_image', 'prev_template_image', 'search_image', 'raw_heatmap', 'post_heatmap', 'atom_heatmap']
                             for image in debug_images:
                                 if image in outputs and outputs[image] is not None:
                                     cv2.imshow(image, outputs[image])
@@ -208,7 +208,7 @@ def main(args, tracker):
 
                     if args.debug_vis:
 
-                        debug_images = ['template_image', 'prev_template_image', 'search_image', 'raw_heatmap', 'post_heatmap']
+                        debug_images = ['template_image', 'prev_template_image', 'search_image', 'raw_heatmap', 'post_heatmap', 'atom_heatmap']
                         for image in debug_images:
                             if image in outputs and outputs[image] is not None:
                                 cv2.imshow(image, outputs[image])
@@ -288,7 +288,7 @@ def main(args, tracker):
                     cv2.imshow(video.name, img)
 
                     if args.debug_vis:
-                        debug_images = ['template_image', 'prev_template_image', 'search_image', 'raw_heatmap', 'post_heatmap']
+                        debug_images = ['template_image', 'prev_template_image', 'search_image', 'raw_heatmap', 'post_heatmap', 'atom_heatmap']
                         for image in debug_images:
                             if image in outputs and outputs[image] is not None:
                                 cv2.imshow(image, outputs[image])

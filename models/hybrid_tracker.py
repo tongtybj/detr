@@ -25,7 +25,7 @@ from pytracking.tracker.atom.optim import ConvProblem, FactorizedConvProblem
 
 # TrTr
 import datasets.utils
-from datasets.utils import crop_image, siamfc_like_scale, get_exemplar_size, get_context_amount # TODO: move to utils
+from datasets.utils import crop_hwc, crop_image, siamfc_like_scale, get_exemplar_size, get_context_amount # TODO: move to utils
 from external_tracker import build_external_tracker
 from util.box_ops import box_cxcywh_to_xyxy
 from util.misc import is_dist_avail_and_initialized, nested_tensor_from_tensor_list
@@ -248,6 +248,8 @@ class Tracker():
         # Compute scores
         scores_raw = self.atom_apply_filter(test_x)
         translation_vec, scale_ind, s, flag = self.atom_localize_target(scores_raw)
+        atom_heatmap = torch.clamp(s[0], min = 0)
+        atom_max_score = torch.max(atom_heatmap).item()
 
         # Update position and scale
 
@@ -257,10 +259,8 @@ class Tracker():
             if self.atom_use_iou_net:
                 out = self.atom_refine_target_box(sample_pos, sample_scales[scale_ind], scale_ind, update_scale_flag)
             else:
-                out = self.trtr_tracking(image, prev_pos[[1,0]], self.target_sz[[1,0]])
+                out = self.trtr_tracking(image, prev_pos[[1,0]], self.target_sz[[1,0]], atom_heatmap)
 
-        score_map = s[scale_ind, ...]
-        max_score = torch.max(score_map).item()
 
 
         # ------- UPDATE ------- #
@@ -292,13 +292,18 @@ class Tracker():
         new_state = [self.target_pos[1] - self.target_sz[1] / 2, self.target_pos[0] - self.target_sz[0] / 2,
                      self.target_pos[1] + self.target_sz[1] / 2, self.target_pos[0] + self.target_sz[0] / 2]
 
-        atom_heatmap = torch.clamp(s[0], min = 0)
-        out = {'bbox': new_state,
-               'score': max_score,
-               'raw_heatmap': (torch.round(atom_heatmap.permute(1,2,0) * 255)).detach().cpu().numpy().astype(np.uint8),}
+        out['bbox'] =  new_state
+
+        out['score'] = atom_max_score
+
+        out['atom_heatmap'] = (torch.round(atom_heatmap.permute(1,2,0) * 255)).detach().cpu().numpy().astype(np.uint8)
+        if 'resized_atom_heatmap' in out:
+            if out['resized_atom_heatmap'] is not None:
+                out['atom_heatmap'] = (np.round(out['resized_atom_heatmap'] * 255)).astype(np.uint8)
+
         return out
 
-    def trtr_tracking(self, img, prev_pos, prev_sz, curr_pos = None):
+    def trtr_tracking(self, img, prev_pos, prev_sz, atom_heatmap = None):
 
         prev_bbox_xyxy = [prev_pos[0] - prev_sz[0] / 2,
                           prev_pos[1] - prev_sz[1] / 2,
@@ -308,6 +313,20 @@ class Tracker():
         _, search_image = crop_image(img, prev_bbox_xyxy, padding = channel_avg, instance_size = self.search_size)
         s_z, scale_z = siamfc_like_scale(prev_bbox_xyxy)
         s_x = self.search_size / scale_z
+
+        if atom_heatmap is not None:
+            atom_real_search_size = (self.atom_img_sample_sz * self.atom_target_scale)[0]
+            trtr_real_search_size = s_x
+            trtr_atom_scale = trtr_real_search_size / atom_real_search_size
+            resized_bbox = torch.cat([(1 - trtr_atom_scale) * self.atom_img_sample_sz / 2, (1 + trtr_atom_scale) * self.atom_img_sample_sz / 2])
+            resized_atom_heatmap =  crop_hwc(atom_heatmap.permute(1,2,0).detach().cpu().numpy(), resized_bbox, self.heatmap_size)
+            #print(resized_bbox, resized_atom_heatmap.shape)
+            unroll_resized_atom_heatmap = torch.tensor(resized_atom_heatmap).view(self.heatmap_size * self.heatmap_size)
+            best_idx = torch.argmax(unroll_resized_atom_heatmap)
+            #print("the peak in atom hetmap: {}".format([best_idx % self.heatmap_size, best_idx // self.heatmap_size]))
+        else:
+            resized_atom_heatmap = None
+
         # get mask
         search_mask = [0, 0, search_image.shape[1], search_image.shape[0]]
         if prev_pos[0] < s_x/2:
@@ -330,113 +349,108 @@ class Tracker():
             else:
                 outputs = self.model(nested_tensor_from_tensor_list([search], [torch.as_tensor(search_mask).float()]))
 
-
-
         outputs = self.postprocess(outputs)
 
         heatmap = outputs['pred_heatmap'][0].cpu() # we only address with a single image
-
         raw_heatmap = heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format
-
         found = torch.max(heatmap) > self.score_threshold
 
-        if curr_pos is not None:
+        if atom_heatmap is not None:
             found = True
 
-        if found:
+        if not found:
+            return {}
 
-            def change(r):
-                return torch.max(r, 1. / r)
+        def change(r):
+            return torch.max(r, 1. / r)
 
-            bbox_wh_map = outputs['pred_bbox_wh'][0].cpu() * torch.as_tensor(search.shape[-2:])  # convert from relative [0, 1] to absolute [0, height] coordinates
+        bbox_wh_map = outputs['pred_bbox_wh'][0].cpu() * torch.as_tensor(search.shape[-2:])  # convert from relative [0, 1] to absolute [0, height] coordinates
 
-            # scale penalty
-            pad = (bbox_wh_map[:, 0] + bbox_wh_map[:, 1]) * get_context_amount()
-            sz = torch.sqrt((bbox_wh_map[:, 0] + pad) * (bbox_wh_map[:, 1] + pad))
-            s_c = change(sz / get_exemplar_size())
+        # scale penalty
+        pad = (bbox_wh_map[:, 0] + bbox_wh_map[:, 1]) * get_context_amount()
+        sz = torch.sqrt((bbox_wh_map[:, 0] + pad) * (bbox_wh_map[:, 1] + pad))
+        s_c = change(sz / get_exemplar_size())
 
-            # aspect ratio penalty
-            r_c = change((bbox_wh_map[:, 0] / bbox_wh_map[:, 1]) / (prev_sz[0] / prev_sz[1]) )
-            penalty = torch.exp(-(r_c * s_c - 1) * self.size_penalty_k)
+        # aspect ratio penalty
+        r_c = change((bbox_wh_map[:, 0] / bbox_wh_map[:, 1]) / (prev_sz[0] / prev_sz[1]) )
+        penalty = torch.exp(-(r_c * s_c - 1) * self.size_penalty_k)
 
-            best_idx = 0
-            window_factor = self.window_factor
-            post_heatmap = None
-            best_score = 0
-            for i in range(self.window_steps):
-                # add distance penalty
-                post_heatmap = penalty * heatmap * (1 -  window_factor) + self.window * window_factor
-                best_idx = torch.argmax(post_heatmap)
-                best_score = heatmap[best_idx].item()
+        best_idx = 0
+        window_factor = self.window_factor
+        post_heatmap = None
+        best_score = 0
 
-                if best_score > self.score_threshold:
-                    break;
-                else:
-                    window_factor = np.max(window_factor - self.window_factor / self.window_steps, 0)
+        for i in range(self.window_steps):
+            # add distance penalty
+            post_heatmap = penalty * heatmap * (1 -  window_factor) + self.window * window_factor
+            best_idx = torch.argmax(post_heatmap)
+            best_score = heatmap[best_idx].item()
 
-            post_heatmap = post_heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format
+            if best_score > self.score_threshold:
+                break;
+            else:
+                window_factor = np.max(window_factor - self.window_factor / self.window_steps, 0)
 
-            # overwrite the result by curr_pos which is obtained from online learning method
-            if curr_pos is not None:
-                disp = (curr_pos - prev_pos) * scale_z *  self.heatmap_size / self.search_size # [x,y]
-                ct = disp + self.heatmap_size/2 # in output coordinate
-                ct_int = ct.int()
-                trtr_best_idx = best_idx
-                best_idx= ct_int[1] * self.heatmap_size + ct_int[0]
-                #print("atom best id: {}; trtr best id: {}".format(best_idx, trtr_best_idx))
+        if atom_heatmap is not None:
+            atom_rate = 0.5 # heuristic
+            post_heatmap = post_heatmap * (1 -  atom_rate) + unroll_resized_atom_heatmap * atom_rate
+            best_idx = torch.argmax(post_heatmap)
+            best_score = post_heatmap[best_idx].item()
 
+        post_heatmap = post_heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format
 
+        # bbox
+        ct_int = torch.stack([best_idx % self.heatmap_size, best_idx // self.heatmap_size], dim = -1)
+        #print("the peak in trtr hetmap: {}".format([best_idx % self.heatmap_size, best_idx // self.heatmap_size]))
+        bbox_reg = outputs['pred_bbox_reg'][0][best_idx].cpu()
+        bbox_ct = (ct_int + bbox_reg) * torch.as_tensor(search.shape[-2:]) / float(self.heatmap_size)
+        bbox_wh = bbox_wh_map[best_idx]
 
-            # bbox
-            ct_int = torch.stack([best_idx % self.heatmap_size, best_idx // self.heatmap_size], dim = -1)
-            bbox_reg = outputs['pred_bbox_reg'][0][best_idx].cpu()
-            bbox_ct = (ct_int + bbox_reg) * torch.as_tensor(search.shape[-2:]) / float(self.heatmap_size)
-            bbox_wh = bbox_wh_map[best_idx]
+        ct_delta = (bbox_ct - self.search_size / 2) / scale_z
+        cx = prev_pos[0] + ct_delta[0].item()
+        cy = prev_pos[1] + ct_delta[1].item()
 
-            ct_delta = (bbox_ct - self.search_size / 2) / scale_z
-            cx = prev_pos[0] + ct_delta[0].item()
-            cy = prev_pos[1] + ct_delta[1].item()
+        # smooth bbox
+        lpf = best_score * self.size_lpf
+        bbox_wh = bbox_wh / scale_z
 
-            # smooth bbox
-            lpf = best_score * self.size_lpf
-            bbox_wh = bbox_wh / scale_z
-
-            width = prev_sz[0] * (1 - lpf) + bbox_wh[0].item() * lpf
-            height = prev_sz[1] * (1 - lpf) + bbox_wh[1].item() * lpf
+        width = prev_sz[0] * (1 - lpf) + bbox_wh[0].item() * lpf
+        height = prev_sz[1] * (1 - lpf) + bbox_wh[1].item() * lpf
 
 
-            # clip boundary
-            bbox = [cx - width / 2, cy - height / 2,
-                    cx + width / 2, cy + height / 2]
-            bbox = self._bbox_clip(bbox, img.shape[:2])
+        # clip boundary
+        bbox = [cx - width / 2, cy - height / 2,
+                cx + width / 2, cy + height / 2]
+        bbox = self._bbox_clip(bbox, img.shape[:2])
 
-            # udpate state ([y,x])
-            if curr_pos is None:
-                self.target_pos = torch.Tensor([(bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2])
-            self.target_sz = torch.Tensor([bbox[3] - bbox[1], bbox[2] - bbox[0]])
-
+        # udpate state ([y,x])
+        self.target_pos = torch.Tensor([(bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2])
+        self.target_sz = torch.Tensor([bbox[3] - bbox[1], bbox[2] - bbox[0]])
 
 
-            # debug for search image:
-            debug_bbox = box_cxcywh_to_xyxy(torch.round(torch.cat([bbox_ct, bbox_wh])).int())
-            rec_search_image = cv2.rectangle(search_image,
-                                             (debug_bbox[0], debug_bbox[1]),
-                                             (debug_bbox[2], debug_bbox[3]),(0,255,0),3)
+        # debug for search image:
+        debug_bbox = box_cxcywh_to_xyxy(torch.round(torch.cat([bbox_ct, bbox_wh * scale_z])).int())
+        rec_search_image = cv2.rectangle(search_image,
+                                         (debug_bbox[0], debug_bbox[1]),
+                                         (debug_bbox[2], debug_bbox[3]),(0,255,0),3)
 
-            raw_heatmap = (torch.round(raw_heatmap * 255)).detach().numpy().astype(np.uint8)
-            post_heatmap = (torch.round(post_heatmap * 255)).detach().numpy().astype(np.uint8)
-            heatmap_resize = cv2.resize(raw_heatmap, search_image.shape[1::-1])
-            heatmap_color = np.stack([heatmap_resize, np.zeros(search_image.shape[1::-1], dtype=np.uint8), heatmap_resize], -1)
-            rec_search_image = np.round(0.4 * heatmap_color + 0.6 * rec_search_image.copy()).astype(np.uint8)
+        raw_heatmap = (torch.round(raw_heatmap * 255)).detach().numpy().astype(np.uint8)
+        post_heatmap = (torch.round(post_heatmap * 255)).detach().numpy().astype(np.uint8)
+        heatmap_resize = cv2.resize(raw_heatmap, search_image.shape[1::-1])
+        heatmap_color = np.stack([heatmap_resize, np.zeros(search_image.shape[1::-1], dtype=np.uint8), heatmap_resize], -1)
+        rec_search_image = np.round(0.4 * heatmap_color + 0.6 * rec_search_image.copy()).astype(np.uint8)
 
+        # for atom online update
+        self.atom_target_scale = torch.sqrt(self.target_sz.prod() / self.atom_base_target_sz.prod())
 
-            return {
-                'bbox': bbox,
-                'score': best_score,
-                'raw_heatmap': raw_heatmap,
-                'post_heatmap': post_heatmap,
-                'search_image': rec_search_image, # debug
-            }
+        return {
+            'bbox': bbox,
+            'score': best_score,
+            'raw_heatmap': raw_heatmap,
+            'post_heatmap': post_heatmap,
+            'search_image': rec_search_image, # debug
+            'resized_atom_heatmap': resized_atom_heatmap,
+        }
 
 
     def atom_apply_filter(self, sample_x: TensorList):
@@ -814,7 +828,7 @@ class Tracker():
 
         # If no box found
         if output_boxes.shape[0] == 0:
-            return
+            return {}
 
         # Take average of top k boxes
         k = self.atom_params.get('iounet_k', 5)
@@ -834,6 +848,9 @@ class Tracker():
 
         if update_scale:
             self.atom_target_scale = new_scale
+            #print(self.atom_target_scale)
+
+        return {}
 
     def atom_optimize_boxes(self, iou_features, init_boxes):
         # Optimize iounet boxes
