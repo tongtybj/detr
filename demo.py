@@ -10,7 +10,8 @@ import cv2
 import torch
 import numpy as np
 from glob import glob
-from models.tracker import build_tracker
+from models.tracker import build_tracker as build_baseline_tracker
+from models.hybrid_tracker import build_tracker as build_online_tracker
 
 torch.set_num_threads(1)
 
@@ -76,6 +77,7 @@ def get_args_parser():
     parser.add_argument('--exemplar_size', default=127, type=int)
     parser.add_argument('--search_size', default=255, type=int)
     parser.add_argument('--context_amount', default=0.5, type=float)
+    parser.add_argument('--use_baseline_tracker', action='store_true')
 
     # * hyper-parameter for tracking
     parser.add_argument('--score_threshold', default=0.1, type=float,
