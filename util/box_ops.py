@@ -101,7 +101,7 @@ def get_axis_aligned_bbox(region):
          np.linalg.norm(region[2:4] - region[4:6])
     A2 = (x2 - x1) * (y2 - y1)
     s = np.sqrt(A1 / A2)
-    w = s * (x2 - x1)
-    h = s * (y2 - y1)
+    w = s * (x2 - x1) + 1
+    h = s * (y2 - y1) + 1
     return cx, cy, w, h
 
