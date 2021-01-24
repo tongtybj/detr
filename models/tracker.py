@@ -66,8 +66,8 @@ class Tracker(object):
         """
 
         bbox_xyxy  = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
-        self.center_pos = [bbox[0] + bbox[2]/2, bbox[1] + bbox[3]/2]
-        self.size = bbox[2:]
+        self.center_pos = torch.Tensor([bbox[0] + bbox[2]/2, bbox[1] + bbox[3]/2])
+        self.size = torch.Tensor(bbox[2:])
         channel_avg = np.mean(img, axis=(0, 1))
 
         # get crop
@@ -261,8 +261,8 @@ class Tracker(object):
             bbox = self._bbox_clip(bbox, img.shape[:2])
 
             # udpate state
-            self.center_pos = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]
-            self.size = [bbox[2] - bbox[0], bbox[3] - bbox[1]]
+            self.center_pos = torch.Tensor([(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2])
+            self.size = torch.Tensor([bbox[2] - bbox[0], bbox[3] - bbox[1]])
 
             # debug for search image:
             start_time = time.time()
