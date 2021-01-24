@@ -13,7 +13,7 @@ if env_path not in sys.path:
 
 from benchmark.test import get_args_parser
 from models import build_model
-from models.tracker import build_tracker
+from models.hybrid_tracker import build_tracker
 
 try:
     import trax
@@ -72,18 +72,7 @@ def run_vot(checkpoint):
     args.dec_layers = 1
 
     # create tracker
-    if not torch.cuda.is_available():
-        raise ValueError("CUDA is not available in Pytorch")
-
-    device = torch.device('cuda')
-
-    model, _, postprocessors = build_model(args)
-
-    checkpoint = torch.load(args.checkpoint, map_location='cpu')
-    assert 'model' in checkpoint
-    model.load_state_dict(checkpoint['model'])
-    model.to(device)
-    tracker = build_tracker(model, postprocessors["bbox"], args)
+    tracker = build_tracker(args)
 
 
     def _convert_anno_to_list(vot_anno):
