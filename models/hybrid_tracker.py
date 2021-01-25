@@ -940,7 +940,6 @@ def build_tracker(args):
 
     device = torch.device('cuda')
 
-    assert args.transformer_mask # should be True
     model, _, postprocessors = build_model(args)
 
     checkpoint = torch.load(args.checkpoint, map_location='cpu')

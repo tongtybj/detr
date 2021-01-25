@@ -70,6 +70,7 @@ def run_vot(checkpoint):
     args.return_layers = ['layer3']
     args.enc_layers = 1
     args.dec_layers = 1
+    args.transformer_mask = False
 
     # create tracker
     tracker = build_tracker(args)
