@@ -15,6 +15,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../external_tracker/ext
 
 from pytracking.tracker.base import BaseTracker
 from pytracking import dcf, fourier, TensorList, operation
+from pytracking.features.featurebase import MultiFeatureBase
+from pytracking.features.extractor import MultiResolutionExtractor
 from pytracking.features.preprocessing import numpy_to_torch
 from pytracking.utils.plotting import show_tensor
 from pytracking.libs.optimization import GaussNewtonCG, ConjugateGradient, GradientDescentL2
@@ -30,6 +32,51 @@ from external_tracker import build_external_tracker
 from util.box_ops import box_cxcywh_to_xyxy
 from util.misc import is_dist_avail_and_initialized, nested_tensor_from_tensor_list
 from models import build_model
+from models.backbone import Backbone as Resnet
+
+
+class ATOMReseNet18(MultiFeatureBase):
+    """ResNet18 backbone wrapper to perform ATOM online updating 
+    args:
+        output_layers: List of layers to output.
+        net_path: Relative or absolute net path (default should be fine).
+    """
+    def __init__(self, output_layers=['layer3'],  *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.output_layers = list(output_layers)
+        self.use_gpu = True
+        self.output_layers = output_layers
+        self.net = Resnet('resnet18', train_backbone = False, return_layers = output_layers , dilation = False)
+        self.net.cuda()
+        self.net.eval()
+
+    def initialize(self):
+        if isinstance(self.pool_stride, int) and self.pool_stride == 1:
+            self.pool_stride = [1] * len(self.output_layers)
+
+        self.feature_layers = self.output_layers
+
+        # for input
+        self.mean = torch.Tensor([0.485, 0.456, 0.406]).view(1, -1, 1, 1)
+        self.std = torch.Tensor([0.229, 0.224, 0.225]).view(1, -1, 1, 1)
+
+        self.layer_stride = {'conv1': 2, 'layer1': 4, 'layer2': 8, 'layer3': 16, 'layer4': 32}
+
+    def stride(self):
+        return TensorList([s * self.layer_stride[l] for l, s in zip(self.output_layers, self.pool_stride)])
+
+    def extract(self, im: torch.Tensor):
+        im = im / 255
+        im -= self.mean
+        im /= self.std
+        im = im.cuda()
+
+        mask = [0, 0, im.shape[-2], im.shape[-1]]
+        with torch.no_grad():
+            output_features = self.net(nested_tensor_from_tensor_list(im, [torch.as_tensor(mask).float()] * im.shape[0]))
+
+        return TensorList([output_features[str(id)].tensors for id, layer in enumerate(self.output_layers)])
 
 
 class Tracker():
@@ -62,6 +109,14 @@ class Tracker():
         ])
         self.first_frame = False
 
+        # Get feature specific params
+        self.atom_fparams = self.atom_params.features.get_fparams('feature_params')
+
+        # overwrite the backbone for online updating (ATOM type)
+        deep_feat = ATOMReseNet18(output_layers=['layer3'], fparams=self.atom_fparams, normalize_power=2)
+        self.atom_params.features = MultiResolutionExtractor([deep_feat])
+        # todo: do we need normalize_power (see MultiResolutionExtractor)?
+
 
     def init(self, image, bbox):
 
@@ -74,9 +129,6 @@ class Tracker():
 
         # Initialize features
         self.atom_params.features.initialize()
-
-        # Get feature specific params
-        self.atom_fparams = self.atom_params.features.get_fparams('feature_params')
 
         # Get position and size
         # NOTE: if you use torch.Tensor, the default type is float32
@@ -99,9 +151,6 @@ class Tracker():
 
         # Target size in base scale
         self.atom_base_target_sz = self.target_sz / self.atom_target_scale
-
-        # Use odd square search area and set sizes
-        feat_max_stride = max(self.atom_params.features.stride())
         self.atom_img_sample_sz = torch.round(torch.sqrt(torch.prod(self.atom_base_target_sz * self.atom_params.search_area_scale))) * torch.ones(2)
 
         # Set sizes
@@ -120,6 +169,7 @@ class Tracker():
         self.atom_init_learning()
 
         # Convert image
+        # TODO: chage the input for atom resnet18
         im = numpy_to_torch(image)
         self.atom_im = im    # For debugging only
 
@@ -132,7 +182,8 @@ class Tracker():
         x = self.atom_generate_init_samples(im)
 
         # Initialize iounet
-        self.atom_init_iou_net()
+        if self.atom_use_iou_net:
+            self.atom_init_iou_net()
 
         # Initialize projection matrix
         self.atom_init_projection_matrix(x)
