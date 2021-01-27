@@ -68,18 +68,23 @@ class BackboneBase(nn.Module):
         for idx, layer in enumerate(return_layers):
             assert layer in ('layer2', 'layer3', 'layer4')
             return_layer_map[layer] = str(idx)
-            #return_layer_map = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
         self.body = IntermediateLayerGetter(backbone, return_layers=return_layer_map)
 
         self.num_channels_list = []
         for layer in return_layers:
             if layer == "layer2":
+                if backbone_name == "resnet18":
+                    self.num_channels_list.append(128)
                 if backbone_name == "resnet50":
                     self.num_channels_list.append(512)
             elif layer == "layer3":
+                if backbone_name == "resnet18":
+                    self.num_channels_list.append(256)
                 if backbone_name == "resnet50":
                     self.num_channels_list.append(1024)
             elif layer == "layer4":
+                if backbone_name == "resnet18":
+                    self.num_channels_list.append(512)
                 if backbone_name == "resnet50":
                     self.num_channels_list.append(2048)
 
@@ -117,9 +122,10 @@ class Backbone(BackboneBase):
             pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d)
         super().__init__(name, backbone, train_backbone, return_layers)
 
+        final_layer = int(return_layers[-1][-1])
         self.stride = 4
-        for d in dilation:
-            if not d:
+        for layer in range(final_layer - 1):
+            if not dilation[layer]:
                 self.stride = self.stride * 2
 
 

@@ -176,28 +176,26 @@ class TrkDataset(Dataset):
                  search_shift, search_scale, search_blur, search_color,
                  exempler_size = 127, search_size = 255,
                  negative_rate = 0.5,
-                 resnet_dilation = []):
+                 return_layers = [],
+                 resnet_dilation = False):
         super(TrkDataset, self).__init__()
 
         self.exempler_size = exempler_size
         self.search_size = search_size
         self.negative_rate = negative_rate
 
-        # woraround for resnet:
+        # woraround for resnet layer2 - layer4
         if resnet_dilation:
             resnet_dilation = [False, True, True]
         else:
             resnet_dilation = [False, False, False]
+        final_layer = int(return_layers[-1][-1])
 
         stride = 4
-        for dilation in resnet_dilation:
-            if not dilation:
+        for layer in range(final_layer - 1):
+            if not resnet_dilation[layer]:
                 stride = stride * 2
         self.output_size = (self.search_size + stride - 1) // stride
-
-        # debug (TODO remove)
-        if self.search_size == 255:
-            assert self.output_size == 32
 
         # create sub dataset
         self.all_dataset = []
@@ -410,5 +408,6 @@ def build(image_set, args):
                          args.search_aug_shift, args.search_aug_scale, args.search_aug_blur, args.search_aug_color,
                          args.exempler_size, args.search_size,
                          args.negative_aug_rate,
+                         args.return_layers,
                          args.resnet_dilation)
     return dataset
