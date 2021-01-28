@@ -192,7 +192,8 @@ def main(args):
     benchmark_eval_args = benchmark_eval_parser.parse_args()
     benchmark_eval_args.tracker_path = benchmark_test_args.result_path
     best_eao = 0
-    best_eao_epoch = 0
+    best_ar = [0, 10] # accuracy & robustness
+
 
     print("Start training")
     start_time = time.time()
@@ -249,26 +250,30 @@ def main(args):
                 if benchmark_test_args.dataset in ['VOT2016', 'VOT2017', 'VOT2018', 'VOT2019']:
                     if args.output_dir:
                         with (output_dir / str("benchmark_" +  benchmark_test_args.dataset + ".txt")).open("a") as f:
-                            f.write("epoch: " + str(epoch) + ", without_transformer_mask, " + json.dumps(eval_result) + ", best EAO: " + str(best_eao) +  "\n")
+                            f.write("epoch: " + str(epoch) + ", best EAO: " + str(best_eao) + ", type: without_transformer_mask, " + json.dumps(eval_result) +  "\n")
 
                     if best_eao < eval_result['EAO']:
 
                         best_eao = eval_result['EAO']
-                        best_eao_epoch = epoch
 
                         if args.output_dir:
                             best_eao_int = int(best_eao*1000)
-                            checkpoint_path = output_dir / f'checkpoint{epoch:04}_best_eao_{best_eao_int:03}_without_transformer_mask.pth'
-                            utils.save_on_master({
-                                'model': model_without_ddp.state_dict(),
-                                'optimizer': optimizer.state_dict(),
-                                'lr_scheduler': lr_scheduler.state_dict(),
-                                'epoch': epoch,
-                                'args': args,
-                            }, checkpoint_path)
 
-                            # hack: only inference model
+                            # record: only inference model
                             utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / f'checkpoint{epoch:04}_best_eao_{best_eao_int:03}_without_transformer_mask_only_inference.pth')
+
+                    if best_ar[0] < eval_result['accuracy'] and best_ar[1] > eval_result['robustness']:
+
+                        best_ar[0] = eval_result['accuracy']
+                        best_ar[1] = eval_result['robustness']
+
+                        if args.output_dir:
+                            best_accuracy_int = int(best_ar[0]*1000)
+                            best_robustness_int = int(best_ar[1]*1000)
+
+                            # record: only inference model
+                            utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / f'checkpoint{epoch:04}_best_ar_{best_accuracy_int:03}_{best_robustness_int:03}_without_transformer_mask_only_inference.pth')
+
                 print("benchmark time: {}".format(benchmark_time))
 
 
@@ -277,7 +282,7 @@ def main(args):
                 inference_model, _, inference_postprocessors = build_model(benchmark_test_args)
 
                 inference_model.load_state_dict(model_without_ddp.state_dict())
-                inference_model.to(device)                            
+                inference_model.to(device)
                 tracker = build_tracker(inference_model, inference_postprocessors["bbox"], benchmark_test_args)
                 benchmark_start_time = time.time()
                 benchmark_test.main(benchmark_test_args, tracker)
@@ -289,27 +294,31 @@ def main(args):
                 if benchmark_test_args.dataset in ['VOT2016', 'VOT2017', 'VOT2018', 'VOT2019']:
                     if args.output_dir:
                         with (output_dir / str("benchmark_" +  benchmark_test_args.dataset + ".txt")).open("a") as f:
-                            f.write("epoch: " + str(epoch) + ", with_transformer_mask, " + json.dumps(eval_result) + ", best EAO: " + str(best_eao) +  "\n")
+                            f.write("epoch: " + str(epoch) + ", best EAO: " + str(best_eao) + ", type: without_transformer_mask, " + json.dumps(eval_result) +  "\n")
 
                     if best_eao < eval_result['EAO']:
 
                         best_eao = eval_result['EAO']
-                        best_eao_epoch = epoch
 
                         if args.output_dir:
                             best_eao_int = int(best_eao*1000)
-                            checkpoint_path = output_dir / f'checkpoint{epoch:04}_best_eao_{best_eao_int:03}_with_transformer_mask.pth'
-                            utils.save_on_master({
-                                'model': model_without_ddp.state_dict(),
-                                'optimizer': optimizer.state_dict(),
-                                'lr_scheduler': lr_scheduler.state_dict(),
-                                'epoch': epoch,
-                                'args': args,
-                            }, checkpoint_path)
 
-                            # hack: only inference model
+                            # record only inference model
                             utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / f'checkpoint{epoch:04}_best_eao_{best_eao_int:03}_with_transformer_mask_only_inference.pth')
-                                                    
+
+                    if best_ar[0] < eval_result['accuracy'] and best_ar[1] > eval_result['robustness']:
+
+                        best_ar[0] = eval_result['accuracy']
+                        best_ar[1] = eval_result['robustness']
+
+                        if args.output_dir:
+                            best_accuracy_int = int(best_ar[0]*1000)
+                            best_robustness_int = int(best_ar[1]*1000)
+
+                            # record: only inference model
+                            utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / f'checkpoint{epoch:04}_best_ar_{best_accuracy_int:03}_{best_robustness_int:03}_without_transformer_mask_only_inference.pth')
+
+
                 print("benchmark time: {}".format(benchmark_time))
         if args.distributed:
             torch.distributed.barrier()
