@@ -66,6 +66,13 @@ class ATOMReseNet18(MultiFeatureBase):
     def stride(self):
         return TensorList([s * self.layer_stride[l] for l, s in zip(self.output_layers, self.pool_stride)])
 
+    def size(self, im_sz):
+        if self.output_size is None:
+            return TensorList([(im_sz + s - 1) // s for s in self.stride()])
+        if isinstance(im_sz, torch.Tensor):
+            return TensorList([(im_sz + s - 1) // s if sz is None else torch.Tensor([sz[0], sz[1]]) for sz, s in zip(self.output_size, self.stride())])
+
+
     def extract(self, im: torch.Tensor):
         im = im / 255
         im -= self.mean
@@ -75,6 +82,7 @@ class ATOMReseNet18(MultiFeatureBase):
         mask = [0, 0, im.shape[-2], im.shape[-1]]
         with torch.no_grad():
             output_features = self.net(nested_tensor_from_tensor_list(im, [torch.as_tensor(mask).float()] * im.shape[0]))
+            #print("im", im.shape, "output_features: ", output_features["0"].tensors.shape)
 
         return TensorList([output_features[str(id)].tensors for id, layer in enumerate(self.output_layers)])
 
@@ -120,7 +128,38 @@ class Tracker():
 
     def init(self, image, bbox):
 
-        state = bbox
+        # Get position and size
+        # NOTE: if you use torch.Tensor, the default type is float32
+        # https://stackoverflow.com/questions/48482787/pytorch-memory-model-torch-from-numpy-vs-torch-tensor
+        # That is the reason why it has a slight worse performance than list operation whcih is  double64 type.
+        # But right now it is OK
+        self.target_pos = torch.Tensor([bbox[1] + bbox[3]/2, bbox[0] + bbox[2]/2]) # center
+        self.target_sz = torch.Tensor([bbox[3], bbox[2]]) # real size in pixel
+
+
+        # TrTr
+        bbox_xyxy  = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
+        channel_avg = np.mean(image, axis=(0, 1))
+        # get crop
+        s_z, scale_z = siamfc_like_scale(bbox_xyxy)
+        s_x = self.search_size / scale_z
+        template_image, _ = crop_image(image, bbox_xyxy, padding = channel_avg)
+
+        # get mask
+        ## reverse order of target_pos and target_sz := [y,x]
+        self.init_template_mask = [0, 0, template_image.shape[1], template_image.shape[0]] # [x1, y1, x2, y2]
+        if self.target_pos[1] < s_z/2: # x1
+            self.init_template_mask[0] = (s_z/2 - self.target_pos[1]) * scale_z
+        if self.target_pos[0] < s_z/2: # y1
+            self.init_template_mask[1] = (s_z/2 - self.target_pos[0]) * scale_z
+        if self.target_pos[1] + s_z/2 > image.shape[0]: # x2
+            self.init_template_mask[2] = self.init_template_mask[2] - (self.target_pos[1] + s_z/2 - image.shape[1]) * scale_z
+        if self.target_pos[1] + s_z/2 > image.shape[1]: # y2
+            self.init_template_mask[3] = self.init_template_mask[3] - (self.target_pos[0] + s_z/2 - image.shape[0]) * scale_z
+        # normalize and conver to torch.tensor
+        self.init_template = self.image_normalize(np.round(template_image).astype(np.uint8)).cuda()
+        self.first_frame = True
+
 
         # Initialize some stuff
         self.atom_frame_num = 1
@@ -130,15 +169,8 @@ class Tracker():
         # Initialize features
         self.atom_params.features.initialize()
 
-        # Get position and size
-        # NOTE: if you use torch.Tensor, the default type is float32
-        # https://stackoverflow.com/questions/48482787/pytorch-memory-model-torch-from-numpy-vs-torch-tensor
-        # That is the reason why it has a slight worse performance than list operation whcih is  double64 type.
-        # But right now it is OK
-        self.target_pos = torch.Tensor([state[1] + state[3]/2, state[0] + state[2]/2])
-        self.target_sz = torch.Tensor([state[3], state[2]])
-
         # Set search area
+        """
         self.atom_target_scale = 1.0
         search_area = torch.prod(self.target_sz * self.atom_params.search_area_scale).item()
         if search_area > self.atom_params.max_image_sample_size:
@@ -146,21 +178,21 @@ class Tracker():
         elif search_area < self.atom_params.min_image_sample_size:
             self.atom_target_scale =  math.sqrt(search_area / self.atom_params.min_image_sample_size)
 
-        # Check if IoUNet is used
-        self.atom_use_iou_net = self.atom_params.get('use_iou_net', False)
-
         # Target size in base scale
         self.atom_base_target_sz = self.target_sz / self.atom_target_scale
         self.atom_img_sample_sz = torch.round(torch.sqrt(torch.prod(self.atom_base_target_sz * self.atom_params.search_area_scale))) * torch.ones(2)
+        """
+        # self.atom_target_scale is updated by siamese method
+        self.atom_img_sample_sz = self.search_size * torch.ones(2)
+        self.atom_target_scale = 1 / scale_z
+        self.atom_base_target_sz = self.target_sz / self.atom_target_scale
 
         # Set sizes
         self.atom_img_support_sz = self.atom_img_sample_sz
         self.atom_feature_sz = self.atom_params.features.size(self.atom_img_sample_sz)
-        self.atom_output_sz = self.atom_params.score_upsample_factor * self.atom_img_support_sz  # Interpolated size of the output
+        self.atom_output_sz = self.atom_img_support_sz # use fourier to get same size with img_support_sz
         self.atom_kernel_size = self.atom_fparams.attribute('kernel_size')
-        # print(self.atom_img_support_sz, self.atom_feature_sz, self.atom_output_sz, self.atom_kernel_size)
-
-        self.atom_iou_img_sample_sz = self.atom_img_sample_sz
+        #print(self.atom_img_support_sz, self.atom_feature_sz, self.atom_output_sz, self.atom_kernel_size)
 
         # Optimization options
         self.atom_output_window = dcf.hann2d(self.atom_output_sz.long(), centered=False).to(self.atom_params.device)
@@ -171,19 +203,12 @@ class Tracker():
         # Convert image
         # TODO: chage the input for atom resnet18
         im = numpy_to_torch(image)
-        self.atom_im = im    # For debugging only
 
         # Setup scale bounds
         self.atom_image_sz = torch.Tensor([im.shape[2], im.shape[3]])
-        self.atom_min_scale_factor = torch.max(10 / self.atom_base_target_sz)
-        self.atom_max_scale_factor = torch.min(self.atom_image_sz / self.atom_base_target_sz)
 
         # Extract and transform sample
         x = self.atom_generate_init_samples(im)
-
-        # Initialize iounet
-        if self.atom_use_iou_net:
-            self.atom_init_iou_net()
 
         # Initialize projection matrix
         self.atom_init_projection_matrix(x)
@@ -200,29 +225,13 @@ class Tracker():
         # Init optimizer and do initial optimization
         self.atom_init_optimization(train_x, init_y)
 
-        # TrTr
-        bbox_xyxy  = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
-        channel_avg = np.mean(image, axis=(0, 1))
+        # For IoUNet
+        self.atom_use_iou_net = self.atom_params.get('use_iou_net', False)
+        self.atom_iou_img_sample_sz = self.atom_img_sample_sz
+        # Initialize iounet
+        if self.atom_use_iou_net:
+            self.atom_init_iou_net()
 
-        # get crop
-        s_z, scale_z = siamfc_like_scale(bbox_xyxy)
-        template_image, _ = crop_image(image, bbox_xyxy, padding = channel_avg)
-
-        # get mask
-        ## reverse order of target_pos and target_sz := [y,x]
-        self.init_template_mask = [0, 0, template_image.shape[1], template_image.shape[0]] # [x1, y1, x2, y2]
-        if self.target_pos[1] < s_z/2: # x1
-            self.init_template_mask[0] = (s_z/2 - self.target_pos[1]) * scale_z
-        if self.target_pos[0] < s_z/2: # y1
-            self.init_template_mask[1] = (s_z/2 - self.target_pos[0]) * scale_z
-        if self.target_pos[1] + s_z/2 > image.shape[0]: # x2
-            self.init_template_mask[2] = self.init_template_mask[2] - (self.target_pos[1] + s_z/2 - image.shape[1]) * scale_z
-        if self.target_pos[1] + s_z/2 > image.shape[1]: # y2
-            self.init_template_mask[3] = self.init_template_mask[3] - (self.target_pos[0] + s_z/2 - image.shape[0]) * scale_z
-
-        # normalize and conver to torch.tensor
-        self.init_template = self.image_normalize(np.round(template_image).astype(np.uint8)).cuda()
-        self.first_frame = True
 
     def _bbox_clip(self, bbox, boundary):
         x1 = max(0, bbox[0])
@@ -491,8 +500,9 @@ class Tracker():
         heatmap_color = np.stack([heatmap_resize, np.zeros(search_image.shape[1::-1], dtype=np.uint8), heatmap_resize], -1)
         rec_search_image = np.round(0.4 * heatmap_color + 0.6 * rec_search_image.copy()).astype(np.uint8)
 
-        # for atom online update
-        self.atom_target_scale = torch.sqrt(self.target_sz.prod() / self.atom_base_target_sz.prod())
+
+        # self.atom_target_scale = torch.sqrt(self.target_sz.prod() / self.atom_base_target_sz.prod())
+        self.atom_target_scale = 1 / siamfc_like_scale(bbox)[1] # TODO: redundant with the begining of this functin
 
         return {
             'bbox': bbox,
@@ -511,6 +521,7 @@ class Tracker():
         # Weighted sum (if multiple features) with interpolation in fourier domain
         weight = self.atom_fparams.attribute('translation_weight', 1.0)
         scores_raw = weight * scores_raw
+        # TODO: learn the mechanism
         sf_weighted = fourier.cfft2(scores_raw) / (scores_raw.size(2) * scores_raw.size(3))
         for i, (sz, ksz) in enumerate(zip(self.atom_feature_sz, self.atom_kernel_size)):
             sf_weighted[i] = fourier.shift_fs(sf_weighted[i], math.pi * (1 - torch.Tensor([ksz[0]%2, ksz[1]%2]) / sz))
@@ -676,7 +687,7 @@ class Tracker():
             self.atom_transforms.extend([augmentation.Rotate(angle, aug_output_sz, get_rand_shift()) for angle in self.atom_params.augmentation['rotate']])
 
         # Generate initial samples
-        init_samples = self.atom_params.features.extract_transformed(im, self.target_pos, self.atom_target_scale, aug_expansion_sz, self.atom_transforms)
+        init_samples = self.atom_params.features.extract_transformed(im, self.target_pos, self.atom_target_scale, aug_expansion_sz, self.atom_transforms) # TODO: no average padding (constant value of 0), also learn how to crop and resize using torch like sample_patch in preprocessing.pyxo
 
         # Remove augmented samples for those that shall not have
         for i, use_aug in enumerate(self.atom_fparams.attribute('use_augmentation')):
@@ -709,7 +720,7 @@ class Tracker():
         output_sigma_factor = self.atom_fparams.attribute('output_sigma_factor')
         self.atom_sigma = (self.atom_feature_sz / self.atom_img_support_sz * self.atom_base_target_sz).prod().sqrt() * output_sigma_factor * torch.ones(2)
 
-        # Center pos in normalized coords
+        # Center pos in normalized coords (offset becuase of the float)
         target_center_norm = (self.target_pos - self.target_pos.round()) / (self.atom_target_scale * self.atom_img_support_sz)
 
         # Generate label functions
@@ -799,12 +810,11 @@ class Tracker():
         return train_y
 
     def atom_update_state(self, new_pos, new_scale = None):
-
         # Update pos
         inside_ratio = 0.2
         inside_offset = (inside_ratio - 0.5) * self.target_sz
+        # boundary margin
         self.target_pos = torch.max(torch.min(new_pos, self.atom_image_sz - inside_offset), inside_offset)
-
 
 
     def atom_get_iounet_box(self, pos, sz, sample_pos, sample_scale):
