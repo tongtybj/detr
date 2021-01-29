@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:1.5-cuda10.1-cudnn7-runtime
+FROM pytorch/pytorch:1.7.0-cuda11.0-cudnn8-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -11,9 +11,6 @@ RUN pip --no-cache-dir install Cython
 COPY requirements.txt /workspace
 
 RUN pip --no-cache-dir install -r /workspace/requirements.txt
-
-# hack for dlbox 
-RUN pip install torch==1.5.1+cu92 torchvision==0.6.1+cu92 -f https://download.pytorch.org/whl/torch_stable.html
 
 # install vot-toolkit-python
 RUN pip install git+https://github.com/votchallenge/vot-toolkit-python
