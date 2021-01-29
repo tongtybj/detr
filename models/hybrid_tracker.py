@@ -480,7 +480,7 @@ class Tracker():
 
 
         # debug for search image:
-        debug_bbox = box_cxcywh_to_xyxy(torch.round(torch.cat([bbox_ct, bbox_wh * scale_z])).int())
+        debug_bbox = torch.round(box_cxcywh_to_xyxy(torch.cat([bbox_ct, bbox_wh * scale_z]))).int()
         rec_search_image = cv2.rectangle(search_image,
                                          (debug_bbox[0], debug_bbox[1]),
                                          (debug_bbox[2], debug_bbox[3]),(0,255,0),3)
