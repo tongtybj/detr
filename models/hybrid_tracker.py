@@ -225,13 +225,6 @@ class Tracker():
         # Init optimizer and do initial optimization
         self.atom_init_optimization(train_x, init_y)
 
-        # For IoUNet
-        self.atom_use_iou_net = self.atom_params.get('use_iou_net', False)
-        self.atom_iou_img_sample_sz = self.atom_img_sample_sz
-        # Initialize iounet
-        if self.atom_use_iou_net:
-            self.atom_init_iou_net()
-
 
     def _bbox_clip(self, bbox, boundary):
         x1 = max(0, bbox[0])
@@ -297,7 +290,7 @@ class Tracker():
         # Convert image
         im = numpy_to_torch(image)
 
-        # ------- LOCALIZATION ------- #
+        # ------- online heatmap and localization ------- #
 
         # Get sample
         prev_pos = self.target_pos
@@ -311,19 +304,25 @@ class Tracker():
         atom_heatmap = torch.clamp(s[0], min = 0)
         atom_max_score = torch.max(atom_heatmap).item()
 
-        # Update position and scale
 
         if flag != 'not_found':
-            update_scale_flag = self.atom_params.get('update_scale_when_uncertain', True) or flag != 'uncertain'
-            self.atom_update_state(sample_pos + translation_vec)
-            if self.atom_use_iou_net:
-                out = self.atom_refine_target_box(sample_pos, sample_scales[scale_ind], scale_ind, update_scale_flag)
-            else:
-                out = self.trtr_tracking(image, prev_pos[[1,0]], self.target_sz[[1,0]], atom_heatmap)
+            # Update pos
+            new_pos = sample_pos + translation_vec
+
+            # boundary margin
+            inside_ratio = 0.2
+            inside_offset = (inside_ratio - 0.5) * self.target_sz
+
+            self.target_pos = torch.max(torch.min(new_pos, self.atom_image_sz - inside_offset), inside_offset)
+        else:
+            atom_heatmap = None
+            raise ValueError("we should not get not_found result from online heatmap updating")
+
+        # Combine with TrTr tracking framework
+        out = self.trtr_tracking(image, prev_pos[[1,0]], self.target_sz[[1,0]], atom_heatmap)
 
 
-
-        # ------- UPDATE ------- #
+        # ------- online heatmap ------- #
 
         # Check flags and set learning rate if hard negative
         update_flag = flag not in ['not_found', 'uncertain']
@@ -585,15 +584,8 @@ class Tracker():
 
         return translation_vec1, scale_ind, scores, None
 
-
     def atom_extract_sample(self, im: torch.Tensor, pos: torch.Tensor, scales, sz: torch.Tensor):
         return self.atom_params.features.extract(im, pos, scales, sz)[0]
-
-    def atom_get_iou_features(self):
-        return self.atom_params.features.get_unique_attribute('iounet_features')
-
-    def atom_get_iou_backbone_features(self):
-        return self.atom_params.features.get_unique_attribute('iounet_backbone_features')
 
     def atom_extract_processed_sample(self, im: torch.Tensor, pos: torch.Tensor, scales, sz: torch.Tensor) -> (TensorList, TensorList):
         x = self.atom_extract_sample(im, pos, scales, sz)
@@ -808,191 +800,6 @@ class Tracker():
             center = sz * target_center_norm + 0.5 * torch.Tensor([(ksz[0] + 1) % 2, (ksz[1] + 1) % 2])
             train_y.append(dcf.label_function_spatial(sz, sig, center))
         return train_y
-
-    def atom_update_state(self, new_pos, new_scale = None):
-        # Update pos
-        inside_ratio = 0.2
-        inside_offset = (inside_ratio - 0.5) * self.target_sz
-        # boundary margin
-        self.target_pos = torch.max(torch.min(new_pos, self.atom_image_sz - inside_offset), inside_offset)
-
-
-    def atom_get_iounet_box(self, pos, sz, sample_pos, sample_scale):
-        """All inputs in original image coordinates"""
-        box_center = (pos - sample_pos) / sample_scale + (self.atom_iou_img_sample_sz - 1) / 2
-        box_sz = sz / sample_scale
-        target_ul = box_center - (box_sz - 1) / 2
-        return torch.cat([target_ul.flip((0,)), box_sz.flip((0,))])
-
-    def atom_init_iou_net(self):
-        # Setup IoU net
-        self.atom_iou_predictor = self.atom_params.features.get_unique_attribute('iou_predictor')
-        for p in self.atom_iou_predictor.parameters():
-            p.requires_grad = False
-
-        # Get target boxes for the different augmentations
-        self.atom_iou_target_box = self.atom_get_iounet_box(self.target_pos, self.target_sz, self.target_pos.round(), self.atom_target_scale)
-        target_boxes = TensorList()
-        if self.atom_params.iounet_augmentation:
-            for T in self.atom_transforms:
-                if not isinstance(T, (augmentation.Identity, augmentation.Translation, augmentation.FlipHorizontal, augmentation.FlipVertical, augmentation.Blur)):
-                    break
-                target_boxes.append(self.atom_iou_target_box + torch.Tensor([T.shift[1], T.shift[0], 0, 0]))
-        else:
-            target_boxes.append(self.atom_iou_target_box.clone())
-        target_boxes = torch.cat(target_boxes.view(1,4), 0).to(self.atom_params.device)
-
-        # Get iou features
-        iou_backbone_features = self.atom_get_iou_backbone_features()
-
-        # Remove other augmentations such as rotation
-        iou_backbone_features = TensorList([x[:target_boxes.shape[0],...] for x in iou_backbone_features])
-
-        # Extract target feat
-        with torch.no_grad():
-            target_feat = self.atom_iou_predictor.get_modulation(iou_backbone_features, target_boxes)
-        self.atom_target_feat = TensorList([x.detach().mean(0) for x in target_feat])
-
-        if self.atom_params.get('iounet_not_use_reference', False):
-            self.atom_target_feat = TensorList([torch.full_like(tf, tf.norm() / tf.numel()) for tf in self.atom_target_feat])
-
-
-    def atom_refine_target_box(self, sample_pos, sample_scale, scale_ind, update_scale = True):
-        # Initial box for refinement
-        init_box = self.atom_get_iounet_box(self.target_pos, self.target_sz, sample_pos, sample_scale)
-
-        # Extract features from the relevant scale
-        iou_features = self.atom_get_iou_features()
-        iou_features = TensorList([x[scale_ind:scale_ind+1,...] for x in iou_features])
-
-        init_boxes = init_box.view(1,4).clone()
-        if self.atom_params.num_init_random_boxes > 0:
-            # Get random initial boxes
-            square_box_sz = init_box[2:].prod().sqrt()
-            rand_factor = square_box_sz * torch.cat([self.atom_params.box_jitter_pos * torch.ones(2), self.atom_params.box_jitter_sz * torch.ones(2)])
-            minimal_edge_size = init_box[2:].min()/3
-            rand_bb = (torch.rand(self.atom_params.num_init_random_boxes, 4) - 0.5) * rand_factor
-            new_sz = (init_box[2:] + rand_bb[:,2:]).clamp(minimal_edge_size)
-            new_center = (init_box[:2] + init_box[2:]/2) + rand_bb[:,:2]
-            init_boxes = torch.cat([new_center - new_sz/2, new_sz], 1)
-            init_boxes = torch.cat([init_box.view(1,4), init_boxes])
-
-        # Refine boxes by maximizing iou
-        output_boxes, output_iou = self.atom_optimize_boxes(iou_features, init_boxes)
-
-        # Remove weird boxes with extreme aspect ratios
-        output_boxes[:, 2:].clamp_(1)
-        aspect_ratio = output_boxes[:,2] / output_boxes[:,3]
-        keep_ind = (aspect_ratio < self.atom_params.maximal_aspect_ratio) * (aspect_ratio > 1/self.atom_params.maximal_aspect_ratio)
-        output_boxes = output_boxes[keep_ind,:]
-        output_iou = output_iou[keep_ind]
-
-        # If no box found
-        if output_boxes.shape[0] == 0:
-            return {}
-
-        # Take average of top k boxes
-        k = self.atom_params.get('iounet_k', 5)
-        topk = min(k, output_boxes.shape[0])
-        _, inds = torch.topk(output_iou, topk)
-        predicted_box = output_boxes[inds, :].mean(0)
-        predicted_iou = output_iou.view(-1, 1)[inds, :].mean(0)
-
-        # Update position
-        new_pos = predicted_box[:2] + predicted_box[2:]/2 - (self.atom_iou_img_sample_sz - 1) / 2
-        new_pos = new_pos.flip((0,)) * sample_scale + sample_pos
-        new_target_sz = predicted_box[2:].flip((0,)) * sample_scale
-        new_scale = torch.sqrt(new_target_sz.prod() / self.atom_base_target_sz.prod())
-
-        self.target_pos = new_pos.clone()
-        self.target_sz = new_target_sz
-
-        if update_scale:
-            self.atom_target_scale = new_scale
-            #print(self.atom_target_scale)
-
-        return {}
-
-    def atom_optimize_boxes(self, iou_features, init_boxes):
-        # Optimize iounet boxes
-        output_boxes = init_boxes.view(1, -1, 4).to(self.atom_params.device)
-        step_length = self.atom_params.box_refinement_step_length
-        init_step_length = self.atom_params.box_refinement_step_length
-        if isinstance(step_length, (tuple, list)):
-            init_step_length = torch.Tensor([step_length[0], step_length[0], step_length[1], step_length[1]]).to(
-                self.atom_params.device).view(1, 1, 4)
-        box_refinement_space = self.atom_params.get('box_refinement_space', 'default')
-
-        step_length = init_step_length * output_boxes.new_ones(1, output_boxes.shape[1], 1)
-        outputs_prev = -99999999 * output_boxes.new_ones(1, output_boxes.shape[1])
-        step = torch.zeros_like(output_boxes)
-
-        if box_refinement_space == 'default':
-            # Optimization using bounding box space used in original IoUNet
-            for i_ in range(self.atom_params.box_refinement_iter):
-                # forward pass
-                bb_init = output_boxes.clone().detach()
-                bb_init.requires_grad = True
-
-                outputs = self.atom_iou_predictor.predict_iou(self.atom_target_feat, iou_features, bb_init)
-
-                if isinstance(outputs, (list, tuple)):
-                    outputs = outputs[0]
-
-                outputs.backward(gradient=torch.ones_like(outputs))
-
-                # Update mask and step length
-                update_mask = (outputs.detach() > outputs_prev) | (self.atom_params.box_refinement_step_decay >= 1)
-                update_mask_float = update_mask.view(1, -1, 1).float()
-                step_length[~update_mask, :] *= self.atom_params.box_refinement_step_decay
-                outputs_prev = outputs.detach().clone()
-
-                # Update proposal
-                step = update_mask_float * step_length * bb_init.grad * bb_init[:, :, 2:].repeat(1, 1, 2) - (
-                            1.0 - update_mask_float) * step
-                output_boxes = bb_init + step
-                output_boxes.detach_()
-
-        elif box_refinement_space == 'relative':
-            # Optimization using relative bounding box space
-            sz_norm = output_boxes[:, :1, 2:].clone()
-            output_boxes_rel = bbutils.rect_to_rel(output_boxes, sz_norm)
-            for i_ in range(self.atom_params.box_refinement_iter):
-                # forward pass
-                bb_init_rel = output_boxes_rel.clone().detach()
-                bb_init_rel.requires_grad = True
-
-                bb_init = bbutils.rel_to_rect(bb_init_rel, sz_norm)
-                outputs = self.atom_iou_predictor.predict_iou(self.atom_target_feat, iou_features, bb_init)
-
-                if isinstance(outputs, (list, tuple)):
-                    outputs = outputs[0]
-
-                outputs.backward(gradient=torch.ones_like(outputs))
-
-                # Update mask and step length
-                update_mask = (outputs.detach() > outputs_prev) | (self.atom_params.box_refinement_step_decay >= 1)
-                update_mask_float = update_mask.view(1, -1, 1).float()
-                step_length[~update_mask, :] *= self.atom_params.box_refinement_step_decay
-                outputs_prev = outputs.detach().clone()
-
-                # Update proposal
-                step = update_mask_float * step_length * bb_init_rel.grad - (1.0 - update_mask_float) * step
-                output_boxes_rel = bb_init_rel + step
-                output_boxes_rel.detach_()
-
-                # for s in outputs.view(-1):
-                #     print('{:.2f}  '.format(s.item()), end='')
-                # print('')
-            # print('')
-
-            output_boxes = bbutils.rel_to_rect(output_boxes_rel, sz_norm)
-
-        else:
-            raise ValueError('Unknown box_refinement_space {}'.format(box_refinement_space))
-
-        return output_boxes.view(-1, 4).cpu(), outputs.detach().view(-1).cpu()
-
 
 def build_tracker(args):
 
