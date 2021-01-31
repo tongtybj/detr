@@ -294,7 +294,7 @@ def main(args):
                 if benchmark_test_args.dataset in ['VOT2016', 'VOT2017', 'VOT2018', 'VOT2019']:
                     if args.output_dir:
                         with (output_dir / str("benchmark_" +  benchmark_test_args.dataset + ".txt")).open("a") as f:
-                            f.write("epoch: " + str(epoch) + ", best EAO: " + str(best_eao) + ", type: without_transformer_mask, " + json.dumps(eval_result) +  "\n")
+                            f.write("epoch: " + str(epoch) + ", best EAO: " + str(best_eao) + ", type: with_transformer_mask, " + json.dumps(eval_result) +  "\n")
 
                     if best_eao < eval_result['EAO']:
 
