@@ -113,6 +113,8 @@ def get_args_parser():
                         help='step to save model')
     parser.add_argument('--benchmark_test_step', default=1, type=int,
                         help='step to test benchmark')
+    parser.add_argument('--benchmark_start_epoch', default=0, type=int,
+                        help='epoch to start benchmark')
 
     return parser
 
@@ -238,7 +240,7 @@ def main(args):
 
         # evualute with benchmark
         if utils.is_main_process():
-            if (epoch + 1) % args.benchmark_test_step == 0:
+            if (epoch + 1) % args.benchmark_test_step == 0 and epoch > args.benchmark_start_epoch:
                 tracker = build_tracker(model_without_ddp, postprocessors["bbox"], benchmark_test_args)
                 benchmark_start_time = time.time()
                 benchmark_test.main(benchmark_test_args, tracker)
