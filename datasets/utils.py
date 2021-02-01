@@ -42,7 +42,7 @@ def print_progress(iteration, total, prefix='', suffix='', decimals=1, barLength
 
 
 def crop_hwc(image, bbox, out_sz, padding=(0, 0, 0)):
-    a = (out_sz-1) / (bbox[2]-bbox[0])
+    a = (out_sz-1) / (bbox[2]-bbox[0]) # TODO: check the one pixel operation i.e., -1
     b = (out_sz-1) / (bbox[3]-bbox[1])
     c = -a * bbox[0]
     d = -b * bbox[1]

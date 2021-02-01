@@ -17,7 +17,7 @@ from pytracking.tracker.base import BaseTracker
 from pytracking import dcf, fourier, TensorList, operation
 from pytracking.features.featurebase import MultiFeatureBase
 from pytracking.features.extractor import MultiResolutionExtractor
-from pytracking.features.preprocessing import numpy_to_torch
+from pytracking.features.preprocessing import numpy_to_torch, sample_patch
 from pytracking.utils.plotting import show_tensor
 from pytracking.libs.optimization import GaussNewtonCG, ConjugateGradient, GradientDescentL2
 from pytracking.features import augmentation
@@ -35,19 +35,93 @@ from models import build_model
 from models.backbone import Backbone as Resnet
 
 
-class ATOMReseNet18(MultiFeatureBase):
-    """ResNet18 backbone wrapper to perform ATOM online updating 
+
+class MultiResolutionExtractor2(MultiResolutionExtractor):
+    """Multi-resolution feature extractor with original padding model.
+    args:
+        features: List of features.
+    """
+    def __init__(self, features):
+        super().__init__(features)
+
+    def extract(self, image, pos, scales, image_sz, padding_value):
+        """Extract features.
+        args:
+            im: Image.
+            pos: Center position for extraction.
+            scales: Image scales to extract features from.
+            image_sz: Size to resize the image samples to before extraction.
+            padding_value: the padding value for outside are in color 3 channel
+        """
+        if isinstance(scales, (int, float)):
+            scales = [scales]
+
+
+        # Get image patches
+        # im = numpy_to_torch(image)
+        # patch_iter, coord_iter = zip(*(sample_patch(im, pos, s*image_sz, image_sz, mode=self.patch_mode, max_scale_change=self.max_scale_change) for s in scales))
+        # im_patches = torch.cat(list(patch_iter))
+
+        im_patches = []
+        for s in scales:
+            assert image_sz[0] == image_sz[1] # TODO: change utils.crop_hwc
+            sz = s * image_sz[0]
+            bbox  = [pos[1]-sz/2, pos[0]-sz/2, pos[1]+sz/2, pos[0]+sz/2]
+            crop_image = crop_hwc(image, bbox, image_sz[0], padding = padding_value)
+            im_patches.append(numpy_to_torch(crop_image))
+        im_patches = torch.cat(im_patches)
+
+        # Compute features
+        feature_map = TensorList([f.get_feature(im_patches) for f in self.features]).unroll()
+
+        return feature_map
+
+    def extract_transformed(self, image, pos, scale, image_sz, transforms, padding_value):
+        """Extract features from a set of transformed image samples.
+        args:
+            im: Image.
+            pos: Center position for extraction.
+            scale: Image scale to extract features from.
+            image_sz: Size to resize the image samples to before extraction.
+            transforms: A set of image transforms to apply.
+            padding_value: the padding value for outside are in color 3 channel
+        """
+
+        # Get image patche
+        # im = numpy_to_torch(image)
+        # im_patch, _ = sample_patch(im, pos, scale*image_sz, image_sz) # no padding
+
+        assert image_sz[0] == image_sz[1] # TODO: change utils.crop_hwc
+        sz = scale*image_sz[0]
+        #print("extract transfromed sz: ", sz, ", original im: ", image.shape)
+        bbox  = [pos[1]-sz/2, pos[0]-sz/2, pos[1]+sz/2, pos[0]+sz/2]
+        crop_image = crop_hwc(image, bbox, image_sz[0], padding = padding_value)
+        im_patch = numpy_to_torch(crop_image)
+
+        # Apply transforms
+        im_patches = torch.cat([T(im_patch) for T in transforms])
+
+        # Compute features
+        feature_map = TensorList([f.get_feature(im_patches) for f in self.features]).unroll()
+
+        return feature_map
+
+
+class ATOMResNet(MultiFeatureBase):
+    """ResNet backbone wrapper to perform ATOM online updating 
     args:
         output_layers: List of layers to output.
         net_path: Relative or absolute net path (default should be fine).
     """
-    def __init__(self, output_layers=['layer3'],  *args, **kwargs):
+    def __init__(self, model_name = 'resnet18', output_layers=['layer3'], dilation = False, trtr_model = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        self.model_name = model_name
         self.output_layers = list(output_layers)
         self.use_gpu = True
         self.output_layers = output_layers
-        self.net = Resnet('resnet18', train_backbone = False, return_layers = output_layers , dilation = False)
+        self.net = Resnet(model_name, train_backbone = False, return_layers = output_layers , dilation = dilation)
+        self.trtr_model = trtr_model
         self.net.cuda()
         self.net.eval()
 
@@ -61,10 +135,11 @@ class ATOMReseNet18(MultiFeatureBase):
         self.mean = torch.Tensor([0.485, 0.456, 0.406]).view(1, -1, 1, 1)
         self.std = torch.Tensor([0.229, 0.224, 0.225]).view(1, -1, 1, 1)
 
-        self.layer_stride = {'conv1': 2, 'layer1': 4, 'layer2': 8, 'layer3': 16, 'layer4': 32}
-
     def stride(self):
-        return TensorList([s * self.layer_stride[l] for l, s in zip(self.output_layers, self.pool_stride)])
+        stride = self.net.stride
+        if self.model_name == 'resnet50': # TODO: special, decrease the depth and the width
+            stride = stride * 2
+        return TensorList([stride])
 
     def size(self, im_sz):
         if self.output_size is None:
@@ -81,10 +156,16 @@ class ATOMReseNet18(MultiFeatureBase):
 
         mask = [0, 0, im.shape[-2], im.shape[-1]]
         with torch.no_grad():
-            output_features = self.net(nested_tensor_from_tensor_list(im, [torch.as_tensor(mask).float()] * im.shape[0]))
-            #print("im", im.shape, "output_features: ", output_features["0"].tensors.shape)
+            xs = self.net(nested_tensor_from_tensor_list(im, [torch.as_tensor(mask).float()] * im.shape[0]))
+            features = []
+            for name, x in xs.items():
+                if self.model_name == 'resnet50': # TODO: special, decrease the depth and the width
+                    #features.append(F.adaptive_avg_pool2d(self.trtr_model.input_projs[int(name)](x.tensors), x.tensors.shape[-1]//2) )
+                    features.append(F.adaptive_avg_pool2d(x.tensors, x.tensors.shape[-1]//2) )
+                else:
+                    features.append(x.tensors)
 
-        return TensorList([output_features[str(id)].tensors for id, layer in enumerate(self.output_layers)])
+        return TensorList(features)
 
 
 class Tracker():
@@ -121,10 +202,12 @@ class Tracker():
         self.atom_fparams = self.atom_params.features.get_fparams('feature_params')
 
         # overwrite the backbone for online updating (ATOM type)
-        deep_feat = ATOMReseNet18(output_layers=['layer3'], fparams=self.atom_fparams, normalize_power=2)
-        self.atom_params.features = MultiResolutionExtractor([deep_feat])
-        # todo: do we need normalize_power (see MultiResolutionExtractor)?
+        deep_feat = ATOMResNet(output_layers=['layer3'], fparams=self.atom_fparams, normalize_power=2)
+        #deep_feat = ATOMResNet(model_name = 'resnet50', dilation = True, trtr_model = self.model, output_layers=['layer3'], fparams=self.atom_fparams, normalize_power=2)
+        self.atom_params.features = MultiResolutionExtractor2([deep_feat])
+        # todo: remember normalize_power (see MultiFeatureBase)?
 
+        self.atom_params.train_skipping = 10 # TODO: tuning 10 - 20 (vot-toolkit)
 
     def init(self, image, bbox):
 
@@ -170,19 +253,6 @@ class Tracker():
         self.atom_params.features.initialize()
 
         # Set search area
-        """
-        self.atom_target_scale = 1.0
-        search_area = torch.prod(self.target_sz * self.atom_params.search_area_scale).item()
-        if search_area > self.atom_params.max_image_sample_size:
-            self.atom_target_scale =  math.sqrt(search_area / self.atom_params.max_image_sample_size)
-        elif search_area < self.atom_params.min_image_sample_size:
-            self.atom_target_scale =  math.sqrt(search_area / self.atom_params.min_image_sample_size)
-
-        # Target size in base scale
-        self.atom_base_target_sz = self.target_sz / self.atom_target_scale
-        self.atom_img_sample_sz = torch.round(torch.sqrt(torch.prod(self.atom_base_target_sz * self.atom_params.search_area_scale))) * torch.ones(2)
-        """
-        # self.atom_target_scale is updated by siamese method
         self.atom_img_sample_sz = self.search_size * torch.ones(2)
         self.atom_target_scale = 1 / scale_z
         self.atom_base_target_sz = self.target_sz / self.atom_target_scale
@@ -200,21 +270,17 @@ class Tracker():
         # Initialize some learning things
         self.atom_init_learning()
 
-        # Convert image
-        # TODO: chage the input for atom resnet18
-        im = numpy_to_torch(image)
-
         # Setup scale bounds
-        self.atom_image_sz = torch.Tensor([im.shape[2], im.shape[3]])
+        self.atom_image_sz = torch.Tensor([image.shape[0], image.shape[1]]) # height, width
 
         # Extract and transform sample
-        x = self.atom_generate_init_samples(im)
+        x = self.atom_generate_init_samples(image, channel_avg)
 
         # Initialize projection matrix
         self.atom_init_projection_matrix(x)
 
         # Transform to get the training sample
-        train_x = self.atom_preprocess_sample(x)
+        train_x = x
 
         # Generate label function
         init_y = self.atom_init_label_function(train_x)
@@ -223,8 +289,9 @@ class Tracker():
         self.atom_init_memory(train_x)
 
         # Init optimizer and do initial optimization
+        start = time.time()
         self.atom_init_optimization(train_x, init_y)
-
+        #print("init optimization time: {}".format(time.time() - start))
 
     def _bbox_clip(self, bbox, boundary):
         x1 = max(0, bbox[0])
@@ -287,8 +354,8 @@ class Tracker():
 
         self.atom_frame_num += 1
 
-        # Convert image
-        im = numpy_to_torch(image)
+        # get padding value
+        channel_avg = np.mean(image, axis=(0, 1))
 
         # ------- online heatmap and localization ------- #
 
@@ -296,7 +363,7 @@ class Tracker():
         prev_pos = self.target_pos
         sample_pos = self.target_pos.round()
         sample_scales = self.atom_target_scale * self.atom_params.scale_factors
-        test_x = self.atom_extract_processed_sample(im, self.target_pos, sample_scales, self.atom_img_sample_sz)
+        test_x = self.atom_extract_processed_sample(image, channel_avg, self.target_pos, sample_scales, self.atom_img_sample_sz)
 
         # Compute scores
         scores_raw = self.atom_apply_filter(test_x)
@@ -319,7 +386,7 @@ class Tracker():
             raise ValueError("we should not get not_found result from online heatmap updating")
 
         # Combine with TrTr tracking framework
-        out = self.trtr_tracking(image, prev_pos[[1,0]], self.target_sz[[1,0]], atom_heatmap)
+        out = self.trtr_tracking(image, channel_avg, prev_pos[[1,0]], self.target_sz[[1,0]], atom_heatmap)
 
 
         # ------- online heatmap ------- #
@@ -343,7 +410,9 @@ class Tracker():
         if hard_negative:
             self.atom_filter_optimizer.run(self.atom_params.hard_negative_CG_iter)
         elif (self.atom_frame_num-1) % self.atom_params.train_skipping == 0:
+            start = time.time()
             self.atom_filter_optimizer.run(self.atom_params.CG_iter)
+            #print("online updating time: {}".format(time.time() - start))
 
         # Return new state
 
@@ -362,13 +431,12 @@ class Tracker():
 
         return out
 
-    def trtr_tracking(self, img, prev_pos, prev_sz, atom_heatmap = None):
+    def trtr_tracking(self, img, channel_avg, prev_pos, prev_sz, atom_heatmap = None):
 
         prev_bbox_xyxy = [prev_pos[0] - prev_sz[0] / 2,
                           prev_pos[1] - prev_sz[1] / 2,
                           prev_pos[0] + prev_sz[0] / 2,
                           prev_pos[1] + prev_sz[1] / 2]
-        channel_avg = np.mean(img, axis=(0, 1))
         _, search_image = crop_image(img, prev_bbox_xyxy, padding = channel_avg, instance_size = self.search_size)
         s_z, scale_z = siamfc_like_scale(prev_bbox_xyxy)
         s_x = self.search_size / scale_z
@@ -584,18 +652,11 @@ class Tracker():
 
         return translation_vec1, scale_ind, scores, None
 
-    def atom_extract_sample(self, im: torch.Tensor, pos: torch.Tensor, scales, sz: torch.Tensor):
-        return self.atom_params.features.extract(im, pos, scales, sz)[0]
 
-    def atom_extract_processed_sample(self, im: torch.Tensor, pos: torch.Tensor, scales, sz: torch.Tensor) -> (TensorList, TensorList):
-        x = self.atom_extract_sample(im, pos, scales, sz)
-        return self.atom_preprocess_sample(self.atom_project_sample(x))
+    def atom_extract_processed_sample(self, im: np.ndarray, padding_value: float, pos: torch.Tensor, scales, sz: torch.Tensor) -> (TensorList, TensorList):
+        x = self.atom_params.features.extract(im, pos, scales, sz, padding_value)
+        return self.atom_project_sample(x)
 
-    def atom_preprocess_sample(self, x: TensorList) -> (TensorList, TensorList):
-        if self.atom_params.get('_feature_window', False):
-            raise
-            x = x * self.atom_feature_window
-        return x
 
     def atom_project_sample(self, x: TensorList, proj_matrix = None):
         # Apply projection matrix
@@ -643,7 +704,7 @@ class Tracker():
             raise ValueError('Unknown activation')
 
 
-    def atom_generate_init_samples(self, im: torch.Tensor):
+    def atom_generate_init_samples(self, im: np.ndarray, padding_value: float):
         """Generate augmented initial samples."""
 
         # Compute augmentation size
@@ -679,13 +740,14 @@ class Tracker():
             self.atom_transforms.extend([augmentation.Rotate(angle, aug_output_sz, get_rand_shift()) for angle in self.atom_params.augmentation['rotate']])
 
         # Generate initial samples
-        init_samples = self.atom_params.features.extract_transformed(im, self.target_pos, self.atom_target_scale, aug_expansion_sz, self.atom_transforms) # TODO: no average padding (constant value of 0), also learn how to crop and resize using torch like sample_patch in preprocessing.pyxo
+        init_samples = self.atom_params.features.extract_transformed(im, self.target_pos, self.atom_target_scale, aug_expansion_sz, self.atom_transforms, padding_value)
 
         # Remove augmented samples for those that shall not have
         for i, use_aug in enumerate(self.atom_fparams.attribute('use_augmentation')):
             if not use_aug:
                 init_samples[i] = init_samples[i][0:1, ...]
 
+        #print("====     atom_init_samples: ", init_samples[0].shape)
         # Add dropout samples
         if 'dropout' in self.atom_params.augmentation:
             num, prob = self.atom_params.augmentation['dropout']
@@ -703,6 +765,7 @@ class Tracker():
         self.atom_projection_matrix = TensorList(
             [None if cdim is None else ex.new_zeros(cdim,ex.shape[1],1,1).normal_(0,1/math.sqrt(ex.shape[1])) for ex, cdim in
              zip(x, self.atom_compressed_dim)])
+        #print("====     atom_projection_matrix: ", self.atom_projection_matrix[0].shape)
 
     def atom_init_label_function(self, train_x):
         # Allocate label function
