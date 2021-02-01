@@ -208,10 +208,10 @@ def main(args, tracker):
 
                     if args.debug_vis:
 
-                        debug_images = ['template_image', 'prev_template_image', 'search_image', 'raw_heatmap', 'post_heatmap', 'atom_heatmap']
-                        for image in debug_images:
-                            if image in outputs and outputs[image] is not None:
-                                cv2.imshow(image, outputs[image])
+                        for key, value in outputs.items():
+                            if isinstance(value, np.ndarray):
+                                if len(value.shape) == 3 or len(value.shape) == 2:
+                                    cv2.imshow(key, value)
                         k = cv2.waitKey(0)
                         if k == 27:         # wait for ESC key to exit
                             sys.exit()
