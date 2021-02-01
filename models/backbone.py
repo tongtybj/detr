@@ -69,6 +69,7 @@ class BackboneBase(nn.Module):
             assert layer in ('layer2', 'layer3', 'layer4')
             return_layer_map[layer] = str(idx)
         self.body = IntermediateLayerGetter(backbone, return_layers=return_layer_map)
+        self.name = backbone_name
 
         self.num_channels_list = []
         for layer in return_layers:
@@ -123,6 +124,7 @@ class Backbone(BackboneBase):
         super().__init__(name, backbone, train_backbone, return_layers)
 
         final_layer = int(return_layers[-1][-1])
+        self.dilation = dilation
         self.stride = 4
         for layer in range(final_layer - 1):
             if not dilation[layer]:
@@ -135,6 +137,7 @@ class Joiner(nn.Sequential):
 
         self.num_channels_list = []
         self.stride = backbone.stride
+        self.dilation = backbone.dilation
 
     def forward(self, tensor_list: NestedTensor, multi_frame = False):
 
