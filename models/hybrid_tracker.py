@@ -41,13 +41,14 @@ class ATOMReseNet18(MultiFeatureBase):
         output_layers: List of layers to output.
         net_path: Relative or absolute net path (default should be fine).
     """
-    def __init__(self, output_layers=['layer3'],  *args, **kwargs):
+    def __init__(self, output_layers=['layer3'], trtr_model = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.output_layers = list(output_layers)
         self.use_gpu = True
         self.output_layers = output_layers
-        self.net = Resnet('resnet18', train_backbone = False, return_layers = output_layers , dilation = False)
+        #self.net = Resnet('resnet18', train_backbone = False, return_layers = output_layers , dilation = False)
+        self.net = trtr_model.backbone[0]
         self.net.cuda()
         self.net.eval()
 
@@ -113,7 +114,7 @@ class Tracker():
         self.atom_fparams = self.atom_params.features.get_fparams('feature_params')
 
         # overwrite the backbone for online updating (ATOM type)
-        deep_feat = ATOMReseNet18(output_layers=['layer3'], fparams=self.atom_fparams, normalize_power=2)
+        deep_feat = ATOMReseNet18(output_layers=['layer3'], trtr_model = self.model, fparams=self.atom_fparams, normalize_power=2)
         self.atom_params.features = MultiResolutionExtractor([deep_feat])
         # todo: do we need normalize_power (see MultiResolutionExtractor)?
 
