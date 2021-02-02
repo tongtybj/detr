@@ -712,7 +712,7 @@ class Tracker():
         assert image_sz[0] == image_sz[1] # TODO: change utils.crop_hwc
         sz = scale * image_sz[0]
         bbox  = [pos[1]-sz/2, pos[0]-sz/2, pos[1]+sz/2, pos[0]+sz/2]
-        crop_image = crop_hwc(image, bbox, image_sz[0], padding = padding_value)
+        crop_image = crop_hwc(image, bbox, int(image_sz[0]), padding = padding_value)
 
         im_patch =  torch.from_numpy(crop_image).float().permute(2, 0, 1).unsqueeze(0) # [1, 3, h, w]
         im_patches = torch.cat([T(im_patch) for T in transforms])
