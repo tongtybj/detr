@@ -264,13 +264,12 @@ class Tracker():
             inside_ratio = 0.2
             inside_offset = (inside_ratio - 0.5) * self.target_sz
 
-            self.target_pos = torch.max(torch.min(new_pos, self.dcf_image_sz - inside_offset), inside_offset)
         else:
             dcf_heatmap = None
             raise ValueError("we should not get not_found result from online heatmap updating")
 
         # Combine with TrTr tracking framework
-        out = self.combine(image.shape[:2], prev_pos[[1,0]], prev_sz[[1,0]], scale_z, outputs, search_image, dcf_heatmap)
+        out = self.combine(image.shape[:2], prev_pos[[1,0]], prev_sz[[1,0]], scale_z, outputs, search_image, flag, dcf_heatmap)
 
 
         # ------- online heatmap ------- #
@@ -292,11 +291,13 @@ class Tracker():
 
         # Train filter
         if hard_negative:
+            start = time.time()
             self.dcf_filter_optimizer.run(self.dcf_params.hard_negative_CG_iter)
+            #print("hard negative dcf updating time: {}".format(time.time() - start))
         elif (self.dcf_frame_num-1) % self.dcf_params.train_skipping == 0:
             start = time.time()
             self.dcf_filter_optimizer.run(self.dcf_params.CG_iter)
-            #print("online updating time: {}".format(time.time() - start))
+            #print("periodic dcf updating time: {}".format(time.time() - start))
 
         # Return new state
 
@@ -315,7 +316,7 @@ class Tracker():
 
         return out
 
-    def combine(self, img_shape, prev_pos, prev_sz, scale_z, trtr_outputs, search_image, dcf_heatmap = None):
+    def combine(self, img_shape, prev_pos, prev_sz, scale_z, trtr_outputs, search_image, dcf_flag, dcf_heatmap = None):
 
         if dcf_heatmap is not None:
             trtr_dcf_scale = 1.0
@@ -363,16 +364,24 @@ class Tracker():
             best_idx = torch.argmax(post_heatmap)
             best_score = heatmap[best_idx].item()
 
+            #print("     trtr window step: ", i, "; window_factor: ", window_factor)
+
             if best_score > self.score_threshold:
                 break;
             else:
                 window_factor = np.max(window_factor - self.window_factor / self.window_steps, 0)
+
+            if window_factor == 0:
+                post_heatmap = penalty * heatmap
+
+        #print("trtr best score: ", best_score, "; dcf flag: ", dcf_flag)
 
         if dcf_heatmap is not None:
             dcf_rate = 0.5 # heuristic
             post_heatmap = post_heatmap * (1 -  dcf_rate) + unroll_resized_dcf_heatmap * dcf_rate
             best_idx = torch.argmax(post_heatmap)
             best_score = post_heatmap[best_idx].item()
+
 
         post_heatmap = post_heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format
 
