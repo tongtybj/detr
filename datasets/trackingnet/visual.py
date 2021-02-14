@@ -6,28 +6,33 @@ import numpy as np
 import glob
 import cv2
 import os
+import random
 
 
 sys.path.append('..')
 import utils
 
 base_path = "./dataset"
-SUBSET_PREFIX = "TRAIN_0" # Please change
-
 
 def show_videos():
 
-    videos = sorted(os.listdir((join(base_path, SUBSET_PREFIX, 'videos'))))
+    subsets = glob.glob(join(base_path, 'TRAIN_*') + "[!zip]")
+    #print(subsets)
+    subset = random.choice(subsets)
+
+    videos = sorted(os.listdir((join(subset, 'videos'))))
+    # print(len(videos))
+    print('select subset of ', subset.split('/')[-1])
 
     for video in videos:
 
         print(video)
-        frames = glob.glob(join(base_path, SUBSET_PREFIX, 'videos', video, '*.jpg'))
+        frames = glob.glob(join(subset, 'videos', video, '*.jpg'))
         def index_keys(text):
             return int(text.split('/')[-1].split('.')[0])
         frames = sorted(frames, key=index_keys)
 
-        with open(join(base_path, SUBSET_PREFIX, 'anno', video + '.txt')) as f:
+        with open(join(subset, 'anno', video + '.txt')) as f:
             ann = f.readlines()
 
         for id, frame in enumerate(frames):
