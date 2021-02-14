@@ -32,6 +32,8 @@ def get_args_parser():
 
     parser.add_argument('--dataset_video_frame_ranges', default=[100], nargs='+')
     parser.add_argument('--dataset_num_uses', default=[-1], nargs='+')
+    parser.add_argument('--eval_dataset_num_uses', default=[], nargs='+')
+
     parser.add_argument('--template_aug_shift', default=4, type=int)
     parser.add_argument('--template_aug_scale', default=0.05, type=float)
     parser.add_argument('--template_aug_color', default=1.0, type=float)
@@ -44,6 +46,7 @@ def get_args_parser():
     parser.add_argument('--resnet_dilation', action='store_false',
                         help="If true, we replace stride with dilation in the last convolutional block (DC5)") #defualt is true
     parser.add_argument('--negative_aug_rate', default=0.2, type=float)
+    parser.add_argument('--return_layers', default=['layer3'])
 
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
