@@ -87,7 +87,7 @@ class TRTR(nn.Module):
                 # print("do multiple frame mode for backbone")
                 multi_frame = True
 
-            template_features, self.template_pos  = self.backbone(template_samples, multi_frame = multi_frame)
+            template_features, self.template_pos, _ = self.backbone(template_samples, multi_frame = multi_frame)
 
             self.template_mask = None
             if self.transformer_mask:
@@ -102,7 +102,7 @@ class TRTR(nn.Module):
             # print("backbone template mask: {}".format(self.template_mask))
 
         start = time.time()
-        search_features, search_pos  = self.backbone(search_samples)
+        search_features, search_pos, all_features  = self.backbone(search_samples)
         # print("search image feature extraction: {}".format(time.time() - start))
         search_mask = None
         if self.transformer_mask:
@@ -141,7 +141,7 @@ class TRTR(nn.Module):
 
         search_mask = search_features[-1].mask.flatten(1).unsqueeze(-1) # [bn, output_hegiht *  output_width, 1]
 
-        out = {'pred_heatmap': outputs_heatmap[-1], 'pred_bbox_reg': outputs_bbox_reg[-1], 'pred_bbox_wh': outputs_bbox_wh[-1], 'search_mask': search_mask, 'search_features': search_features}
+        out = {'pred_heatmap': outputs_heatmap[-1], 'pred_bbox_reg': outputs_bbox_reg[-1], 'pred_bbox_wh': outputs_bbox_wh[-1], 'search_mask': search_mask, 'all_features': all_features}
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_heatmap, outputs_bbox_reg, outputs_bbox_wh, search_mask)
         return out

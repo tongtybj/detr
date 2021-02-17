@@ -56,6 +56,7 @@ def get_args_parser():
                         help="Number of query slots")
     parser.add_argument('--pre_norm', action='store_true')
     parser.add_argument('--return_layers', default=[], nargs='+')
+    parser.add_argument('--dcf_layers', default=[], nargs='+')
     parser.add_argument('--weighted', action='store_true',
                         help="the weighted for the multiple input embedding for transformer")
     parser.add_argument('--transformer_mask', action='store_false',
@@ -181,10 +182,10 @@ def main(args, tracker):
                             cv2.putText(img, 'lost', (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                             cv2.imshow(video.name, img)
 
-                            debug_images = ['template_image', 'prev_template_image', 'search_image', 'raw_heatmap', 'post_heatmap', 'atom_heatmap']
-                            for image in debug_images:
-                                if image in outputs and outputs[image] is not None:
-                                    cv2.imshow(image, outputs[image])
+                            for key, value in outputs.items():
+                                if isinstance(value, np.ndarray):
+                                    if len(value.shape) == 3 or len(value.shape) == 2:
+                                        cv2.imshow(key, value)
 
                             k = cv2.waitKey(0)
                             if k == 27:         # wait for ESC key to exit

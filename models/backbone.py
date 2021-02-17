@@ -62,12 +62,11 @@ class BackboneBase(nn.Module):
         for name, parameter in backbone.named_parameters():
             if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
                 parameter.requires_grad_(False)
+
+        self.return_layers = return_layers
         return_layer_map = {}
-        if not return_layers:
-            return_layers = ["layer4"]
-        for idx, layer in enumerate(return_layers):
-            assert layer in ('layer2', 'layer3', 'layer4')
-            return_layer_map[layer] = str(idx)
+        for idx, layer in enumerate(range(2, int(return_layers[-1][-1]) + 1)):
+            return_layer_map['layer' + str(layer)] = str(layer)
         self.body = IntermediateLayerGetter(backbone, return_layers=return_layer_map)
         self.name = backbone_name
 
@@ -93,6 +92,11 @@ class BackboneBase(nn.Module):
         xs = self.body(tensor_list.tensors)
         out: Dict[str, NestedTensor] = {}
         for name, x in xs.items():
+
+            if 'layer' + name not in self.return_layers:
+                continue
+
+            #print(name, ", ", x.shape)
             m = tensor_list.mask
             assert m is not None
             mask = F.interpolate(m[None].float(), size=x.shape[-2:]).to(torch.bool)[0]
@@ -104,7 +108,7 @@ class BackboneBase(nn.Module):
                 mask[invalid_indices] = torch.zeros(x.shape[-2:], dtype=torch.bool, device=mask.device)
 
             out[name] = NestedTensor(x, mask)
-        return out
+        return out, xs
 
 
 class Backbone(BackboneBase):
@@ -141,7 +145,7 @@ class Joiner(nn.Sequential):
 
     def forward(self, tensor_list: NestedTensor, multi_frame = False):
 
-        xs = self[0](tensor_list) # extract feature from search image (embedding)
+        xs, extra_out = self[0](tensor_list) # extract feature from search image (embedding)
         out: List[NestedTensor] = []
         pos = []
         for name, x in xs.items():
@@ -151,7 +155,7 @@ class Joiner(nn.Sequential):
 
             # print("backbone {}: shape: {}".format(name, x.tensors.shape))
 
-        return out, pos
+        return out, pos, extra_out
 
 def build_backbone(args):
     position_embedding = build_position_encoding(args)
