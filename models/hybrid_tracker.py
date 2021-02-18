@@ -273,6 +273,37 @@ class Tracker():
             dcf_heatmap = None
             raise ValueError("we should not get not_found result from online heatmap updating")
 
+        """
+        # use the last result as template image
+        heatmap = outputs['pred_heatmap'][0].cpu()
+        print("max torch.max(heatmap): ", torch.max(heatmap))
+        if torch.max(heatmap) < self.score_threshold and dcf_heatmap is not None:
+            template_image, _ = crop_image(self.prev_image, prev_bbox_xyxy, padding = self.prev_channel_avg)
+
+            # get mask
+            template_mask = [0, 0, template_image.shape[1], template_image.shape[0]] # [x1, y1, x2, y2]
+            if prev_pos[1] < s_z/2:
+                template_mask[0] = (s_z/2 - prev_pos[1]) * scale_z
+            if prev_pos[0] < s_z/2:
+                template_mask[1] = (s_z/2 - prev_pos[0]) * scale_z
+            if prev_pos[1] + s_z/2 > image.shape[1]:
+                template_mask[2] = template_mask[2] - (prev_pos[1] + s_z/2 - image.shape[1]) * scale_z
+            if prev_pos[0] + s_z/2 > image.shape[0]:
+                template_mask[3] = template_mask[3] - (prev_pos[0] + s_z/2 - image.shape[0]) * scale_z
+
+            # normalize and conver to torch.tensor
+            # TODO: use extracted feature from search image
+            template = self.image_normalize(np.round(template_image).astype(np.uint8)).cuda()
+            with torch.no_grad():
+                outputs = self.model(nested_tensor_from_tensor_list([search], [torch.as_tensor(search_mask).float()]),
+                                     nested_tensor_from_tensor_list([template], [torch.as_tensor(template_mask).float()]))
+                self.first_frame = True
+
+            all_features = outputs["all_features"]
+            outputs = self.postprocess(outputs)
+            print("use last result as template image")
+        """
+
         # Combine with TrTr tracking framework
         out = self.combine(image.shape[:2], prev_pos[[1,0]], prev_sz[[1,0]], scale_z, outputs, search_image, flag, dcf_heatmap)
 
@@ -294,6 +325,10 @@ class Tracker():
             # Update memory
             self.dcf_update_memory(train_x, train_y, learning_rate)
 
+            # Update image
+            self.prev_image = image
+            self.prev_channel_avg = channel_avg
+
         # Train filter
         if hard_negative:
             start = time.time()
@@ -305,7 +340,6 @@ class Tracker():
             #print("periodic dcf updating time: {}".format(time.time() - start))
 
         # Return new state
-
         # NOTE: if you use a tensor and [[1:0]], which got worse performance, don't know why
         new_state = [self.target_pos[1] - self.target_sz[1] / 2, self.target_pos[0] - self.target_sz[0] / 2,
                      self.target_pos[1] + self.target_sz[1] / 2, self.target_pos[0] + self.target_sz[0] / 2]
@@ -335,8 +369,9 @@ class Tracker():
             resized_dcf_heatmap = None
 
         heatmap = trtr_outputs['pred_heatmap'][0].cpu() # we only address with a single image
-        raw_heatmap = heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format
+        raw_heatmap = heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format, for visualize
         found = torch.max(heatmap) > self.score_threshold
+
 
         if dcf_heatmap is not None:
             found = True
