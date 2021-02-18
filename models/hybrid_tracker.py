@@ -59,7 +59,7 @@ class Tracker():
         self.first_frame = False
 
         # Get feature specific params
-        self.dcf_fparams = self.dcf_params.features.get_fparams('feature_params')
+        self.dcf_fparams = TensorList(self.dcf_params.features.get_fparams('feature_params').list() * len(dcf_layers))
         self.dcf_params.train_skipping = 10 # TODO: tuning 10 - 20 (vot-toolkit)
 
         self.dcf_layers = dcf_layers
@@ -169,7 +169,7 @@ class Tracker():
             raise ValueError('Unknown "filter_init_method"')
 
         # Setup factorized joint optimization
-        self.projection_reg = TensorList(self.dcf_fparams.attribute('projection_reg').list() * len(self.dcf_layers))
+        self.projection_reg = self.dcf_fparams.attribute('projection_reg')
 
         self.dcf_joint_problem = FactorizedConvProblem(self.dcf_init_training_samples, init_y, self.dcf_filter_reg,
                                                    self.projection_reg, self.dcf_params, self.dcf_init_sample_weights,
@@ -564,7 +564,7 @@ class Tracker():
     def dcf_init_learning(self):
 
         # Filter regularization
-        self.dcf_filter_reg = TensorList(self.dcf_fparams.attribute('filter_reg').list() * len(self.dcf_layers))
+        self.dcf_filter_reg = self.dcf_fparams.attribute('filter_reg')
 
         # Activation function after the projection matrix (phi_1 in the paper)
         projection_activation = self.dcf_params.get('projection_activation', 'none')
@@ -676,7 +676,6 @@ class Tracker():
 
         # Return only the ones to use for initial training
         return TensorList([y[:x.shape[0], ...] for y, x in zip(self.dcf_y, train_x)])
-
 
     def dcf_init_memory(self, train_x):
         # Initialize first-frame training samples
