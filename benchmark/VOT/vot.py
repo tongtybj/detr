@@ -60,16 +60,17 @@ def convert_vot_anno_to_rect(vot_anno, type):
         raise ValueError
 
 
-def run_vot(checkpoint):
+def run_vot(checkpoint, return_layers = ['layer3'], dcf_layers = ['layer3'], enc_layers = 1, dec_layers = 1):
 
     parser = argparse.ArgumentParser('TRTR model', parents=[get_args_parser()])
     args = parser.parse_args()
     args.checkpoint = checkpoint
 
     # hard-coding
-    args.return_layers = ['layer3']
-    args.enc_layers = 1
-    args.dec_layers = 1
+    args.return_layers = return_layers
+    args.dcf_layers = dcf_layers
+    args.enc_layers = enc_layers
+    args.dec_layers = dec_layers
 
     # create tracker
     tracker = build_tracker(args)
