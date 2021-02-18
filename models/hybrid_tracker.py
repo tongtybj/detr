@@ -171,18 +171,22 @@ class Tracker():
         # Setup factorized joint optimization
         self.projection_reg = self.dcf_fparams.attribute('projection_reg')
 
-        self.dcf_joint_problem = FactorizedConvProblem(self.dcf_init_training_samples, init_y, self.dcf_filter_reg,
-                                                   self.projection_reg, self.dcf_params, self.dcf_init_sample_weights,
-                                                   self.dcf_projection_activation, self.dcf_response_activation)
+        self.dcf_joint_problems = []
+        self.dcf_joint_optimizers = []
+        for i in range(len(self.dcf_layers)):
+            self.dcf_joint_problems.append(FactorizedConvProblem(self.dcf_init_training_samples[i:i+1], init_y[i:i+1], self.dcf_filter_reg,
+                                                                 self.projection_reg, self.dcf_params, self.dcf_init_sample_weights[i:i+1],
+                                                                 self.dcf_projection_activation, self.dcf_response_activation))
 
-        # Variable containing both filter and projection matrix
-        joint_var = self.dcf_filter.concat(self.dcf_projection_matrix)
+            # Variable containing both filter and projection matrix
+            joint_var = self.dcf_filter[i:i+1].concat(self.dcf_projection_matrix[i:i+1])
 
-        # Initialize optimizer
-        self.dcf_joint_optimizer = GaussNewtonCG(self.dcf_joint_problem, joint_var)
+            # Initialize optimizer
+            self.dcf_joint_optimizers.append(GaussNewtonCG(self.dcf_joint_problems[-1], joint_var))
 
-        # Do joint optimization
-        self.dcf_joint_optimizer.run(self.dcf_params.init_CG_iter // self.dcf_params.init_GN_iter, self.dcf_params.init_GN_iter)
+            # Do joint optimization
+            self.dcf_joint_optimizers[-1].run(self.dcf_params.init_CG_iter // self.dcf_params.init_GN_iter, self.dcf_params.init_GN_iter)
+
 
 
         # Re-project samples with the new projection matrix
@@ -190,21 +194,23 @@ class Tracker():
         for train_samp, init_samp in zip(self.dcf_training_samples, compressed_samples):
             train_samp[:init_samp.shape[0],...] = init_samp
 
-
         # Initialize optimizer
-        self.dcf_conv_problem = ConvProblem(self.dcf_training_samples, self.dcf_y, self.dcf_filter_reg, self.dcf_sample_weights, self.dcf_response_activation)
-        self.dcf_filter_optimizer = ConjugateGradient(self.dcf_conv_problem, self.dcf_filter, fletcher_reeves=self.dcf_params.fletcher_reeves)
+        self.dcf_conv_problems = []
+        self.dcf_filter_optimizers = []
+        for i in range(len(self.dcf_layers)):
+            self.dcf_conv_problems.append(ConvProblem(self.dcf_training_samples[i:i+1], self.dcf_y[i:i+1], self.dcf_filter_reg, self.dcf_sample_weights[i:i+1], self.dcf_response_activation))
+            self.dcf_filter_optimizers.append(ConjugateGradient(self.dcf_conv_problems[-1], self.dcf_filter[i:i+1], fletcher_reeves=self.dcf_params.fletcher_reeves))
 
-        # Transfer losses from previous optimization
-        self.dcf_filter_optimizer.residuals = self.dcf_joint_optimizer.residuals
-        self.dcf_filter_optimizer.losses = self.dcf_joint_optimizer.losses
+            # Transfer losses from previous optimization
+            self.dcf_filter_optimizers[-1].residuals = self.dcf_joint_optimizers[-1].residuals
+            self.dcf_filter_optimizers[-1].losses = self.dcf_joint_optimizers[-1].losses
 
-        # Post optimization
-        self.dcf_filter_optimizer.run(self.dcf_params.post_init_CG_iter)
+            # Post optimization
+            self.dcf_filter_optimizers[-1].run(self.dcf_params.post_init_CG_iter)
 
         # Free memory
         del self.dcf_init_training_samples
-        del self.dcf_joint_problem, self.dcf_joint_optimizer
+        del self.dcf_joint_problems, self.dcf_joint_optimizers
 
     def track(self, image):
 
@@ -254,24 +260,22 @@ class Tracker():
         test_x = self.dcf_project_sample(self.dcf_feature_preprocess(all_features))
 
         # Compute scores
-        scores_raw = self.dcf_apply_filter(test_x)
+        raw_scores = self.dcf_apply_filter(test_x)
 
-        translation_vec, s, flag = self.dcf_localize_target(scores_raw)
-        dcf_heatmap = torch.clamp(s[0], min = 0)
-        dcf_max_score = torch.max(dcf_heatmap).item()
+        translation_vecs = []
+        dcf_heatmaps = []
+        flags = []
+        dcf_max_scores = []
+        for i in range(len(self.dcf_layers)):
+            translation_vec, s, flag = self.dcf_localize_target(raw_scores[i:i+1], i)
+            translation_vecs.append(translation_vec)
+            flags.append(flag)
+            dcf_heatmaps.append(torch.clamp(s[0], min = 0))
+            dcf_max_scores.append(torch.max(dcf_heatmaps[-1]).item())
 
 
-        if flag != 'not_found':
-            # Update pos
-            new_pos = sample_pos + translation_vec
-
-            # boundary margin
-            inside_ratio = 0.2
-            inside_offset = (inside_ratio - 0.5) * self.target_sz
-
-        else:
-            dcf_heatmap = None
-            raise ValueError("we should not get not_found result from online heatmap updating")
+        if ['not_found'] * len(self.dcf_layers) == flags:
+            raise ValueError("we should not get not_found result from dcf")
 
         """
         # use the last result as template image
@@ -305,39 +309,41 @@ class Tracker():
         """
 
         # Combine with TrTr tracking framework
-        out = self.combine(image.shape[:2], prev_pos[[1,0]], prev_sz[[1,0]], scale_z, outputs, search_image, flag, dcf_heatmap)
+        out = self.combine(image.shape[:2], prev_pos[[1,0]], prev_sz[[1,0]], scale_z, outputs, search_image, flags, dcf_heatmaps)
 
 
         # ------- online heatmap ------- #
+        for id, flag in enumerate(flags):
 
-        # Check flags and set learning rate if hard negative
-        update_flag = flag not in ['not_found', 'uncertain']
-        hard_negative = (flag == 'hard_negative')
-        learning_rate = self.dcf_params.hard_negative_learning_rate if hard_negative else None
+            # Check flags and set learning rate if hard negative
+            update_flag = flag not in ['not_found', 'uncertain']
+            hard_negative = (flag == 'hard_negative')
+            learning_rate = self.dcf_params.hard_negative_learning_rate if hard_negative else None
 
-        if update_flag:
-            # Get train sample
-            train_x = TensorList([x[0:1, ...] for x in test_x])
+            if update_flag:
+                # Get train sample
+                train_x = test_x[id]
 
-            # Create label for sample
-            train_y = self.dcf_get_label_function(sample_pos, self.dcf_target_scale)
+                # Create label for sample
+                train_y = self.dcf_get_label_function(sample_pos, self.dcf_target_scale, id)
 
-            # Update memory
-            self.dcf_update_memory(train_x, train_y, learning_rate)
+                # Update memory
+                self.dcf_update_memory(train_x, train_y, id, learning_rate)
 
-            # Update image
-            self.prev_image = image
-            self.prev_channel_avg = channel_avg
+                # Update image
+                self.prev_image = image
+                self.prev_channel_avg = channel_avg
 
-        # Train filter
-        if hard_negative:
-            start = time.time()
-            self.dcf_filter_optimizer.run(self.dcf_params.hard_negative_CG_iter)
-            #print("hard negative dcf updating time: {}".format(time.time() - start))
-        elif (self.dcf_frame_num-1) % self.dcf_params.train_skipping == 0:
-            start = time.time()
-            self.dcf_filter_optimizer.run(self.dcf_params.CG_iter)
-            #print("periodic dcf updating time: {}".format(time.time() - start))
+            # Train filter
+            if hard_negative:
+                start = time.time()
+                self.dcf_filter_optimizers[id].run(self.dcf_params.hard_negative_CG_iter)
+                #print("hard negative dcf{} updating time: {}".format(id+1, time.time() - start))
+            elif (self.dcf_frame_num-1) % self.dcf_params.train_skipping == 0:
+                start = time.time()
+                self.dcf_filter_optimizers[id].run(self.dcf_params.CG_iter)
+                #print("periodic dcf{} updating time: {}".format(id+1, time.time() - start))
+
 
         # Return new state
         # NOTE: if you use a tensor and [[1:0]], which got worse performance, don't know why
@@ -346,34 +352,30 @@ class Tracker():
 
         out['bbox'] =  new_state
 
-        out['score'] = dcf_max_score
-
-        out['dcf_heatmap'] = (torch.round(dcf_heatmap.permute(1,2,0) * 255)).detach().cpu().numpy().astype(np.uint8)
-        if 'resized_dcf_heatmap' in out:
-            if out['resized_dcf_heatmap'] is not None:
-                out['dcf_heatmap'] = (np.round(out['resized_dcf_heatmap'] * 255)).astype(np.uint8)
+        for id, heatmap in enumerate(dcf_heatmaps):
+            out['dcf_heatmap' + str(id + 1)] = (torch.round(heatmap.permute(1,2,0) * 255)).detach().cpu().numpy().astype(np.uint8)
+            if 'resized_dcf_heatmap' + str(id + 1) in out:
+                if out['resized_dcf_heatmap' + str(id + 1)] is not None:
+                    out['dcf_heatmap' + str(id + 1)] = (np.round(out['resized_dcf_heatmap' + str(id + 1)] * 255)).astype(np.uint8)
 
         return out
 
-    def combine(self, img_shape, prev_pos, prev_sz, scale_z, trtr_outputs, search_image, dcf_flag, dcf_heatmap = None):
+    def combine(self, img_shape, prev_pos, prev_sz, scale_z, trtr_outputs, search_image, dcf_flags, dcf_heatmaps = None):
 
-        if dcf_heatmap is not None:
+        if dcf_heatmaps is not None:
             trtr_dcf_scale = 1.0
             resized_bbox = torch.cat([(1 - trtr_dcf_scale) * self.dcf_img_sample_sz / 2, (1 + trtr_dcf_scale) * self.dcf_img_sample_sz / 2])
-            resized_dcf_heatmap =  crop_hwc(dcf_heatmap.permute(1,2,0).detach().cpu().numpy(), resized_bbox, self.heatmap_size)
-            #print(resized_bbox, resized_dcf_heatmap.shape)
-            unroll_resized_dcf_heatmap = torch.tensor(resized_dcf_heatmap).view(self.heatmap_size * self.heatmap_size)
-            best_idx = torch.argmax(unroll_resized_dcf_heatmap)
-            #print("the peak in dcf hetmap: {}".format([best_idx % self.heatmap_size, best_idx // self.heatmap_size]))
+            resized_dcf_heatmaps = []
+            for id, heatmap in enumerate(dcf_heatmaps):
+                resized_dcf_heatmaps.append(crop_hwc(heatmap.permute(1,2,0).detach().cpu().numpy(), resized_bbox, self.heatmap_size))
         else:
-            resized_dcf_heatmap = None
+            resized_dcf_heatmaps = None
 
         heatmap = trtr_outputs['pred_heatmap'][0].cpu() # we only address with a single image
         raw_heatmap = heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format, for visualize
         found = torch.max(heatmap) > self.score_threshold
 
-
-        if dcf_heatmap is not None:
+        if dcf_heatmaps is not None:
             found = True
 
         if not found:
@@ -416,10 +418,17 @@ class Tracker():
 
         #print("trtr best score: ", best_score, "; dcf flag: ", dcf_flag)
 
-        if dcf_heatmap is not None:
-            dcf_rate =  1 - 1 / (1 + len(self.dcf_layers))  # TODO: average
-            #print("dcf_rate", dcf_rate)
-            post_heatmap = post_heatmap * (1 -  dcf_rate) + unroll_resized_dcf_heatmap * dcf_rate
+        if dcf_heatmaps is not None:
+            avg_rate =  1 / (1 + len(self.dcf_layers))  # TODO: average
+
+            post_heatmap = post_heatmap * avg_rate
+            for heatmap in resized_dcf_heatmaps:
+
+                unroll_heatmap = torch.tensor(heatmap).view(self.heatmap_size * self.heatmap_size)
+                # best_idx = torch.argmax(unroll_heatmap)
+                # print("the peak in dcf heatmap{}: {}".format(id, [best_idx % self.heatmap_size, best_idx // self.heatmap_size]))
+                post_heatmap += avg_rate * unroll_heatmap
+
             best_idx = torch.argmax(post_heatmap)
             best_score = post_heatmap[best_idx].item()
 
@@ -470,26 +479,29 @@ class Tracker():
         # self.dcf_target_scale = torch.sqrt(self.target_sz.prod() / self.dcf_base_target_sz.prod())
         self.dcf_target_scale = 1 / siamfc_like_scale(bbox)[1] # TODO: redundant with the begining of this functin
 
-        return {
+        out = {
             'bbox': bbox,
             'score': best_score,
             'raw_heatmap': raw_heatmap,
             'post_heatmap': post_heatmap,
             'search_image': rec_search_image, # debug
-            'resized_dcf_heatmap': resized_dcf_heatmap,
         }
+        for id, heatmap in enumerate(resized_dcf_heatmaps):
+            out['resized_dcf_heatmap' + str(id + 1)] = heatmap
+
+        return out
 
 
     def dcf_apply_filter(self, sample_x: TensorList):
         #print("len of dcf_filter: ", len(self.dcf_filter))
         return operation.conv2d(sample_x, self.dcf_filter, mode='same')
 
-    def dcf_localize_target(self, scores_raw):
+    def dcf_localize_target(self, raw_scores, id):
         # TODO: learn the mechanism
-        sf_weighted = fourier.cfft2(scores_raw) / (scores_raw.size(2) * scores_raw.size(3))
-        #print("scores_raw", type(scores_raw), len(scores_raw), scores_raw[0].shape)
+        sf_weighted = fourier.cfft2(raw_scores) / (raw_scores.size(2) * raw_scores.size(3))
+        # print("raw_scores", type(raw_scores), len(raw_scores), raw_scores[0].shape)
 
-        for i, sz in enumerate(self.dcf_feature_sz):
+        for i, sz in enumerate(self.dcf_feature_sz[id:id+1]):
             sf_weighted[i] = fourier.shift_fs(sf_weighted[i], math.pi * (1 - torch.Tensor([self.dcf_kernel_size[0]%2, self.dcf_kernel_size[1]%2]) / sz))
 
         scores_fs = fourier.sum_fs(sf_weighted)
@@ -662,7 +674,9 @@ class Tracker():
 
         # Output sigma factor
         output_sigma_factor = self.dcf_fparams.attribute('output_sigma_factor')
-        self.dcf_sigma = (self.dcf_feature_sz / self.dcf_img_support_sz * self.dcf_base_target_sz).prod().sqrt() * output_sigma_factor * torch.ones(2)
+        dcf_sigma = (self.dcf_feature_sz / self.dcf_img_support_sz * self.dcf_base_target_sz).prod().sqrt() * output_sigma_factor * torch.ones(2)
+        self.dcf_sigma = TensorList(dcf_sigma.list() * len(self.dcf_layers))
+
 
         # Center pos in normalized coords (offset becuase of the float)
         target_center_norm = (self.target_pos - self.target_pos.round()) / (self.dcf_target_scale * self.dcf_img_support_sz)
@@ -673,7 +687,6 @@ class Tracker():
             for i, T in enumerate(self.dcf_transforms[:x.shape[0]]):
                 sample_center = center_pos + torch.Tensor(T.shift) / self.dcf_img_support_sz * sz
                 y[i, 0, ...] = dcf.label_function_spatial(sz, sig, sample_center)
-
         # Return only the ones to use for initial training
         return TensorList([y[:x.shape[0], ...] for y, x in zip(self.dcf_y, train_x)])
 
@@ -696,15 +709,12 @@ class Tracker():
         self.dcf_training_samples = TensorList(
             [x.new_zeros(self.dcf_params.sample_memory_size, self.dcf_compressed_dim, x.shape[2], x.shape[3]) for x in train_x])
 
-    def dcf_update_memory(self, sample_x: TensorList, sample_y: TensorList, learning_rate = None):
-        replace_ind = self.dcf_update_sample_weights(self.dcf_sample_weights, self.dcf_previous_replace_ind, self.dcf_num_stored_samples, self.dcf_num_init_samples, self.dcf_fparams, learning_rate)
-        self.dcf_previous_replace_ind = replace_ind
-        for train_samp, x, ind in zip(self.dcf_training_samples, sample_x, replace_ind):
-            train_samp[ind:ind+1,...] = x
-        for y_memory, y, ind in zip(self.dcf_y, sample_y, replace_ind):
-            y_memory[ind:ind+1,...] = y
-        self.dcf_num_stored_samples += 1
-
+    def dcf_update_memory(self, sample_x: torch.Tensor, sample_y: torch.Tensor, id, learning_rate = None):
+        replace_ind = self.dcf_update_sample_weights(self.dcf_sample_weights[id:id+1], self.dcf_previous_replace_ind[id:id+1], self.dcf_num_stored_samples[id:id+1], self.dcf_num_init_samples[id:id+1], self.dcf_fparams, learning_rate)[0]
+        self.dcf_previous_replace_ind[id] = replace_ind
+        self.dcf_training_samples[id][replace_ind:replace_ind+1,...] = sample_x
+        self.dcf_y[id][replace_ind:replace_ind+1,...] = sample_y
+        self.dcf_num_stored_samples[id] += 1
 
     def dcf_update_sample_weights(self, sample_weights, previous_replace_ind, num_stored_samples, num_init_samples, fparams, learning_rate = None):
         # Update weights and get index to replace in memory
@@ -744,14 +754,15 @@ class Tracker():
 
         return replace_ind
 
-    def dcf_get_label_function(self, sample_pos, sample_scale):
+
+    def dcf_get_label_function(self, sample_pos, sample_scale, id):
         # Generate label function
-        train_y = TensorList()
         target_center_norm = (self.target_pos - sample_pos) / (sample_scale * self.dcf_img_support_sz)
-        for sig, sz in zip(self.dcf_sigma, self.dcf_feature_sz):
-            center = sz * target_center_norm + 0.5 * torch.Tensor([(self.dcf_kernel_size[0] + 1) % 2, (self.dcf_kernel_size[1] + 1) % 2])
-            train_y.append(dcf.label_function_spatial(sz, sig, center))
-        return train_y
+        sig = self.dcf_sigma[id]
+        sz = self.dcf_feature_sz[id]
+
+        center = sz * target_center_norm + 0.5 * torch.Tensor([(self.dcf_kernel_size[0] + 1) % 2, (self.dcf_kernel_size[1] + 1) % 2])
+        return dcf.label_function_spatial(sz, sig, center)
 
     def dcf_extract_transformed(self, image, pos, scale, image_sz, transforms, padding_value):
         """Extract features from a set of transformed image samples.
