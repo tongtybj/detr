@@ -481,7 +481,7 @@ class Tracker():
         translation_vec1 = target_disp1 * (self.dcf_img_support_sz / self.dcf_output_sz) * self.dcf_target_scale
 
         if max_score1.item() < self.dcf_params.target_not_found_threshold:
-            return translation_vec1, scale_ind, scores, 'not_found'
+            return translation_vec1, scores, 'not_found'
 
         # Mask out target neighborhood
         target_neigh_sz = self.dcf_params.target_neighborhood_scale * self.target_sz / self.dcf_target_scale
@@ -505,14 +505,14 @@ class Tracker():
             disp_threshold = self.dcf_params.dispalcement_scale * math.sqrt(sz[0] * sz[1]) / 2
 
             if disp_norm2 > disp_threshold and disp_norm1 < disp_threshold:
-                return translation_vec1, scale_ind, scores, 'hard_negative'
+                return translation_vec1, scores, 'hard_negative'
             if disp_norm2 < disp_threshold and disp_norm1 > disp_threshold:
-                return translation_vec2, scale_ind, scores, 'hard_negative'
+                return translation_vec2, scores, 'hard_negative'
             if disp_norm2 > disp_threshold and disp_norm1 > disp_threshold:
-                return translation_vec1, scale_ind, scores, 'uncertain'
+                return translation_vec1, scores, 'uncertain'
 
             # If also the distractor is close, return with highest score
-            return translation_vec1, scale_ind, scores, 'uncertain'
+            return translation_vec1, scores, 'uncertain'
 
         if max_score2 > self.dcf_params.hard_negative_threshold * max_score1 and max_score2 > self.dcf_params.target_not_found_threshold:
             return translation_vec1, scores, 'hard_negative'
