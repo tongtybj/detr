@@ -63,6 +63,7 @@ def get_args_parser():
                         help="mask for transformer") # workaround to enable transformer mask for default
     parser.add_argument('--multi_frame', action='store_true',
                         help="use multi frame for encoder (template images)")
+    parser.add_argument('--vot_repetition', default=1, type=int)
 
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
@@ -105,7 +106,6 @@ def get_args_parser():
     parser.add_argument('--model_name', default='trtr', type=str)
 
     parser.add_argument('--result_path', default='results', type=str)
-
     parser.add_argument('--external_tracker', default="", type=str)
 
     return parser
@@ -132,112 +132,119 @@ def main(args, tracker):
                 # test one special video
                 if video.name != args.video:
                     continue
-            frame_counter = 0
-            lost_number = 0
-            toc = 0
-            pred_bboxes = []
 
-            template_image = None
-            search_image = None
-            raw_heatmap = None
-            post_heatmap = None
+            video_total_lost = 0
+            for cnt in range(args.vot_repetition):
+                frame_counter = 0
+                lost_number = 0
+                toc = 0
+                pred_bboxes = []
 
-            for idx, (img, gt_bbox) in enumerate(video):
-                if len(gt_bbox) == 4:
-                    gt_bbox = [gt_bbox[0], gt_bbox[1],
-                               gt_bbox[0], gt_bbox[1]+gt_bbox[3],
-                               gt_bbox[0]+gt_bbox[2], gt_bbox[1]+gt_bbox[3],
-                               gt_bbox[0]+gt_bbox[2], gt_bbox[1]]
-                tic = cv2.getTickCount()
-                if idx == frame_counter:
-                    cx, cy, w, h = get_axis_aligned_bbox(np.array(gt_bbox))
-                    gt_bbox_ = [cx - w/2, cy - h/2, w, h]
-                    tracker.init(img, gt_bbox_)
-                    pred_bbox = gt_bbox_
-                    pred_bboxes.append(1)
-                elif idx > frame_counter:
-                    outputs = tracker.track(img)
-                    pred_bbox = outputs['bbox']
-                    pred_bbox = [pred_bbox[0], pred_bbox[1],
-                                 pred_bbox[2] - pred_bbox[0],
-                                 pred_bbox[3] - pred_bbox[1]]
+                template_image = None
+                search_image = None
+                raw_heatmap = None
+                post_heatmap = None
 
-                    overlap = vot_overlap(pred_bbox, gt_bbox, (img.shape[1], img.shape[0]))
-                    if overlap > 0:
-                        # not lost
-                        pred_bboxes.append(pred_bbox)
+                for idx, (img, gt_bbox) in enumerate(video):
+                    if len(gt_bbox) == 4:
+                        gt_bbox = [gt_bbox[0], gt_bbox[1],
+                                   gt_bbox[0], gt_bbox[1]+gt_bbox[3],
+                                   gt_bbox[0]+gt_bbox[2], gt_bbox[1]+gt_bbox[3],
+                                   gt_bbox[0]+gt_bbox[2], gt_bbox[1]]
+                    tic = cv2.getTickCount()
+                    if idx == frame_counter:
+                        cx, cy, w, h = get_axis_aligned_bbox(np.array(gt_bbox))
+                        gt_bbox_ = [cx - w/2, cy - h/2, w, h]
+                        tracker.init(img, gt_bbox_)
+                        pred_bbox = gt_bbox_
+                        pred_bboxes.append(1)
+                    elif idx > frame_counter:
+                        outputs = tracker.track(img)
+                        pred_bbox = outputs['bbox']
+                        pred_bbox = [pred_bbox[0], pred_bbox[1],
+                                     pred_bbox[2] - pred_bbox[0],
+                                     pred_bbox[3] - pred_bbox[1]]
+
+                        overlap = vot_overlap(pred_bbox, gt_bbox, (img.shape[1], img.shape[0]))
+                        if overlap > 0:
+                            # not lost
+                            pred_bboxes.append(pred_bbox)
+                        else:
+                            # lost object
+                            pred_bboxes.append(2)
+                            frame_counter = idx + 5 # skip 5 frames
+                            lost_number += 1
+
+                            if args.vis and args.debug_vis:
+                                cv2.polylines(img, [np.array(gt_bbox, np.int).reshape((-1, 2))], True, (0, 255, 0), 3)
+
+                                bbox = list(map(int, pred_bbox))
+                                cv2.rectangle(img, (bbox[0], bbox[1]),
+                                              (bbox[0]+bbox[2], bbox[1]+bbox[3]), (0, 255, 255), 3)
+                                cv2.putText(img, str(idx), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                                cv2.putText(img, 'lost', (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                                cv2.imshow(video.name, img)
+
+                                for key, value in outputs.items():
+                                    if isinstance(value, np.ndarray):
+                                        if len(value.shape) == 3 or len(value.shape) == 2:
+                                            cv2.imshow(key, value)
+
+                                k = cv2.waitKey(0)
+                                if k == 27:         # wait for ESC key to exit
+                                    sys.exit()
+
                     else:
-                        # lost object
-                        pred_bboxes.append(2)
-                        frame_counter = idx + 5 # skip 5 frames
-                        lost_number += 1
+                        pred_bboxes.append(0)
+                    toc += cv2.getTickCount() - tic
+                    if idx == 0:
+                        if args.vis:
+                            cv2.destroyAllWindows()
+                    if args.vis and idx > frame_counter:
+                        cv2.polylines(img, [np.array(gt_bbox, np.int).reshape((-1, 2))], True, (0, 255, 0), 3)
 
-                        if args.vis and args.debug_vis:
-                            cv2.polylines(img, [np.array(gt_bbox, np.int).reshape((-1, 2))], True, (0, 255, 0), 3)
+                        bbox = list(map(int, pred_bbox))
+                        cv2.rectangle(img, (bbox[0], bbox[1]),
+                                      (bbox[0]+bbox[2], bbox[1]+bbox[3]), (0, 255, 255), 3)
+                        cv2.putText(img, str(idx), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                        cv2.putText(img, str(lost_number), (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                        cv2.imshow(video.name, img)
 
-                            bbox = list(map(int, pred_bbox))
-                            cv2.rectangle(img, (bbox[0], bbox[1]),
-                                          (bbox[0]+bbox[2], bbox[1]+bbox[3]), (0, 255, 255), 3)
-                            cv2.putText(img, str(idx), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-                            cv2.putText(img, 'lost', (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                            cv2.imshow(video.name, img)
+                        if args.debug_vis:
 
                             for key, value in outputs.items():
                                 if isinstance(value, np.ndarray):
                                     if len(value.shape) == 3 or len(value.shape) == 2:
                                         cv2.imshow(key, value)
-
                             k = cv2.waitKey(0)
                             if k == 27:         # wait for ESC key to exit
                                 sys.exit()
+                        else:
+                            cv2.waitKey(1)
+                    elif not args.vis:
+                        sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
 
-                else:
-                    pred_bboxes.append(0)
-                toc += cv2.getTickCount() - tic
-                if idx == 0:
-                    if args.vis:
-                        cv2.destroyAllWindows()
-                if args.vis and idx > frame_counter:
-                    cv2.polylines(img, [np.array(gt_bbox, np.int).reshape((-1, 2))], True, (0, 255, 0), 3)
+                toc /= cv2.getTickFrequency()
+                # save results
+                video_path = os.path.join(args.result_path, args.dataset, model_name,
+                        'baseline', video.name)
+                if not os.path.isdir(video_path):
+                    os.makedirs(video_path)
+                result_path = os.path.join(video_path, '{}_{:03d}.txt'.format(video.name, cnt+1))
+                with open(result_path, 'w') as f:
+                    for x in pred_bboxes:
+                        if isinstance(x, int):
+                            f.write("{:d}\n".format(x))
+                        else:
+                            f.write(','.join([vot_float2str("%.4f", i) for i in x])+'\n')
+                print('({:3d}) Video ({:2d}): {:12s} Time: {:4.1f}s Speed: {:3.1f}fps Lost: {:d}'.format(
+                        v_idx+1, cnt+1, video.name, toc, idx / toc, lost_number))
+                video_total_lost += lost_number
+            total_lost += video_total_lost
+            if args.vot_repetition > 1:
+                print('({:3d}) Video: {:12s} Avg Lost: {:.3f}'.format(v_idx+1, video.name, video_total_lost/args.vot_repetition))
 
-                    bbox = list(map(int, pred_bbox))
-                    cv2.rectangle(img, (bbox[0], bbox[1]),
-                                  (bbox[0]+bbox[2], bbox[1]+bbox[3]), (0, 255, 255), 3)
-                    cv2.putText(img, str(idx), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-                    cv2.putText(img, str(lost_number), (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                    cv2.imshow(video.name, img)
-
-                    if args.debug_vis:
-
-                        for key, value in outputs.items():
-                            if isinstance(value, np.ndarray):
-                                if len(value.shape) == 3 or len(value.shape) == 2:
-                                    cv2.imshow(key, value)
-                        k = cv2.waitKey(0)
-                        if k == 27:         # wait for ESC key to exit
-                            sys.exit()
-                    else:
-                        cv2.waitKey(1)
-                elif not args.vis:
-                    sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
-
-            toc /= cv2.getTickFrequency()
-            # save results
-            video_path = os.path.join(args.result_path, args.dataset, model_name,
-                    'baseline', video.name)
-            if not os.path.isdir(video_path):
-                os.makedirs(video_path)
-            result_path = os.path.join(video_path, '{}_001.txt'.format(video.name))
-            with open(result_path, 'w') as f:
-                for x in pred_bboxes:
-                    if isinstance(x, int):
-                        f.write("{:d}\n".format(x))
-                    else:
-                        f.write(','.join([vot_float2str("%.4f", i) for i in x])+'\n')
-            print('({:3d}) Video: {:12s} Time: {:4.1f}s Speed: {:3.1f}fps Lost: {:d}'.format(
-                    v_idx+1, video.name, toc, idx / toc, lost_number))
-            total_lost += lost_number
-        print("{:s} total lost: {:d}".format(model_name, total_lost))
+        print("{:s} total (avg) lost: {:.3f}".format(model_name, total_lost/args.vot_repetition))
     else:
         # OPE tracking
         for v_idx, video in enumerate(dataset):

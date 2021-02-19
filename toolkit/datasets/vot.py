@@ -73,10 +73,14 @@ class VOTVideo(Video):
             tracker_names = [tracker_names]
         for name in tracker_names:
             traj_files = glob(os.path.join(path, name, 'baseline', self.name, '*0*.txt'))
+
+            """
             if len(traj_files) == 15:
                 traj_files = traj_files
             else:
                 traj_files = traj_files[0:1]
+            """
+
             pred_traj = []
             for traj_file in traj_files:
                 with open(traj_file, 'r') as f:
