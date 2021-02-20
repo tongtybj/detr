@@ -120,12 +120,13 @@ def main(args, tracker):
 
     dataset = DatasetFactory.create_dataset(name=args.dataset,
                                             dataset_root=dataset_root,
-                                            load_img=False)
+                                            load_img=False,
+                                            single_video=args.video)
 
     model_name = args.model_name
 
     total_lost = 0
-    if args.dataset in ['VOT2016', 'VOT2018', 'VOT2019']:
+    if args.dataset in ['VOT2016', 'VOT2018', 'VOT2019', 'VOT2020']:
         # restart tracking
         for v_idx, video in enumerate(dataset):
             if args.video != '':

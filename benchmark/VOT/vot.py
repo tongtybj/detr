@@ -60,7 +60,7 @@ def convert_vot_anno_to_rect(vot_anno, type):
         raise ValueError
 
 
-def run_vot(checkpoint, return_layers = ['layer3'], dcf_layers = ['layer3'], enc_layers = 1, dec_layers = 1):
+def run_vot(checkpoint, return_layers = ['layer3'], dcf_layers = ['layer3'], enc_layers = 1, dec_layers = 1, vot2020 = False):
 
     parser = argparse.ArgumentParser('TRTR model', parents=[get_args_parser()])
     args = parser.parse_args()
@@ -77,8 +77,11 @@ def run_vot(checkpoint, return_layers = ['layer3'], dcf_layers = ['layer3'], enc
 
 
     def _convert_anno_to_list(vot_anno):
-        vot_anno = [vot_anno[0][0][0], vot_anno[0][0][1], vot_anno[0][1][0], vot_anno[0][1][1],
-                    vot_anno[0][2][0], vot_anno[0][2][1], vot_anno[0][3][0], vot_anno[0][3][1]]
+        if vot2020:
+            vot_anno = [vot_anno[0], vot_anno[1], vot_anno[2], vot_anno[3]]
+        else:
+            vot_anno = [vot_anno[0][0][0], vot_anno[0][0][1], vot_anno[0][1][0], vot_anno[0][1][1],
+                        vot_anno[0][2][0], vot_anno[0][2][1], vot_anno[0][3][0], vot_anno[0][3][1]]
         return vot_anno
 
     def _convert_image_path(image_path):
@@ -86,12 +89,13 @@ def run_vot(checkpoint, return_layers = ['layer3'], dcf_layers = ['layer3'], enc
         return "".join(image_path_new)
 
     """Run tracker on VOT."""
-    handle = VOT("polygon")
+    region_format = "rectangle" if vot2020 else "polygon"
+    handle = VOT(region_format)
 
-    vot_anno_polygon = handle.region()
-    vot_anno_polygon = _convert_anno_to_list(vot_anno_polygon)
+    vot_anno = handle.region()
+    vot_anno = _convert_anno_to_list(vot_anno)
 
-    init_state = convert_vot_anno_to_rect(vot_anno_polygon, 'preserve_area')
+    init_state = convert_vot_anno_to_rect(vot_anno, 'preserve_area')
 
     image_path = handle.frame()
     if not image_path:
@@ -112,7 +116,10 @@ def run_vot(checkpoint, return_layers = ['layer3'], dcf_layers = ['layer3'], enc
         out = tracker.track(image)
         state = out['bbox']
 
-        handle.report(Rectangle(state[0], state[1], state[2] - state[0], state[3] - state[1]))
+        if vot2020:
+            handle.report(Rectangle(state[0], state[1], state[2] - state[0], state[3] - state[1]), 1.0)
+        else:
+            handle.report(Rectangle(state[0], state[1], state[2] - state[0], state[3] - state[1]))
 
 class VOT(object):
     """ Base class for Python VOT integration """
