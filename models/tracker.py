@@ -71,7 +71,6 @@ class Tracker(object):
         self.center_pos = torch.Tensor([bbox[0] + bbox[2]/2, bbox[1] + bbox[3]/2])
         self.size = torch.Tensor(bbox[2:])
         channel_avg = np.mean(img, axis=(0, 1))
-
         # get crop
         s_z, scale_z = siamfc_like_scale(bbox_xyxy)
         template_image, _ = crop_image(img, bbox_xyxy, padding = channel_avg)
