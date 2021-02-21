@@ -12,57 +12,55 @@ class UAVVideo(Video):
     Args:
         name: video name
         root: dataset root
-        video_dir: video directory
-        init_rect: init rectangle
         img_names: image names
         gt_rect: groundtruth rectangle
-        attr: attribute of video
-    """
-    def __init__(self, name, root, video_dir, init_rect, img_names,
-            gt_rect, attr, load_img=False):
-        super(UAVVideo, self).__init__(name, root, video_dir,
-                init_rect, img_names, gt_rect, attr, load_img)
 
+    """
+    def __init__(self, name, root, gt_rects, img_names, load_img=False):
+        super(UAVVideo, self).__init__(name, root, name, gt_rects[0], img_names, gt_rects, None, load_img)
 
 class UAVDataset(Dataset):
     """
     Args:
-        name: dataset name, should be 'UAV123', 'UAV20L'
+        name: dataset name, should be UAV (only suppot UAV123)
         dataset_root: dataset root
         load_img: wether to load all imgs
     """
-    def __init__(self, name, dataset_root, load_img=False):
+    def __init__(self, name, dataset_root, load_img=False, single_video=None):
         super(UAVDataset, self).__init__(name, dataset_root)
-        with open(os.path.join(dataset_root, name+'.json'), 'r') as f:
-            meta_data = json.load(f)
 
         # load videos
-        pbar = tqdm(meta_data.keys(), desc='loading '+name, ncols=100)
-        self.videos = {}
-        for video in pbar:
+        dataset_dir = os.path.join(dataset_root, 'dataset', 'UAV123')
+        anno_files = glob(os.path.join(dataset_dir, 'anno', 'UAV123', '*.txt'))
+        assert len(anno_files) == 123
+        video_names = [x.split('/')[-1].split('.')[0] for x in anno_files]
 
-            if not os.path.isdir(os.path.join(dataset_root, video)):
+        pbar = tqdm(video_names, desc='loading '+name, ncols=100)
+
+        self.videos = {}
+        for idx, video in enumerate(pbar):
+
+            if single_video and single_video != video:
                 continue
 
+            video_dir = os.path.join(dataset_dir, 'data_seq', 'UAV123', video)
+            if not os.path.isdir(video_dir):
+                continue
+
+            img_names = sorted(glob(os.path.join(video_dir, '*.jpg')), key=lambda x:int(os.path.basename(x).split('.')[0]))
+
+            assert anno_files[idx].split('/')[-1].split('.')[0] == video
+
+            with open(anno_files[idx], 'r') as f:
+                gt_rects = [list(map(float, x.strip().split(','))) for x in f.readlines()]
+
+            if len(img_names) > len(gt_rects):
+                img_names = img_names[0:len(gt_rects)]
+
+
             pbar.set_postfix_str(video)
-            self.videos[video] = UAVVideo(video,
-                                          dataset_root,
-                                          meta_data[video]['video_dir'],
-                                          meta_data[video]['init_rect'],
-                                          meta_data[video]['img_names'],
-                                          meta_data[video]['gt_rect'],
-                                          meta_data[video]['attr'])
+            self.videos[video] = UAVVideo(video, dataset_root, gt_rects, img_names)
 
         # set attr
-        attr = []
-        for x in self.videos.values():
-            attr += x.attr
-        attr = set(attr)
         self.attr = {}
         self.attr['ALL'] = list(self.videos.keys())
-        for x in attr:
-            self.attr[x] = []
-        for k, v in self.videos.items():
-            for attr_ in v.attr:
-                self.attr[attr_].append(k)
-

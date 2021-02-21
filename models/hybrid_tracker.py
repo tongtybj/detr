@@ -30,7 +30,7 @@ from pytracking.tracker.atom.optim import ConvProblem, FactorizedConvProblem
 
 class Tracker():
 
-    def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf, dcf_layers):
+    def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf, dcf_layers, dcf_rate):
 
         dcf_param_module = importlib.import_module('pytracking.parameter.atom.default_vot')
         self.dcf_params = dcf_param_module.parameters()
@@ -46,6 +46,7 @@ class Tracker():
         self.heatmap_size = (search_size + backbone_stride - 1) // backbone_stride
         self.size_lpf = size_lpf
         self.size_penalty_k = size_penalty_k
+        self.dcf_rate =  dcf_rate
 
         hanning = np.hanning(self.heatmap_size)
         self.window = torch.as_tensor(np.outer(hanning, hanning).flatten())
@@ -417,9 +418,7 @@ class Tracker():
         #print("trtr best score: ", best_score, "; dcf flag: ", dcf_flag)
 
         if dcf_heatmap is not None:
-            dcf_rate =  1 - 1 / (1 + len(self.dcf_layers))  # TODO: average
-            #print("dcf_rate", dcf_rate)
-            post_heatmap = post_heatmap * (1 -  dcf_rate) + unroll_resized_dcf_heatmap * dcf_rate
+            post_heatmap = post_heatmap * (1 -  self.dcf_rate) + unroll_resized_dcf_heatmap * self.dcf_rate
             best_idx = torch.argmax(post_heatmap)
             best_score = post_heatmap[best_idx].item()
 
@@ -823,4 +822,4 @@ def build_tracker(args):
     model.load_state_dict(checkpoint['model'])
     model.to(device)
 
-    return Tracker(model, postprocessors["bbox"], args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.dcf_layers)
+    return Tracker(model, postprocessors["bbox"], args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.dcf_layers, args.dcf_rate)

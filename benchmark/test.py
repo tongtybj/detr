@@ -63,7 +63,7 @@ def get_args_parser():
                         help="mask for transformer") # workaround to enable transformer mask for default
     parser.add_argument('--multi_frame', action='store_true',
                         help="use multi frame for encoder (template images)")
-    parser.add_argument('--vot_repetition', default=1, type=int)
+    parser.add_argument('--repetition', default=1, type=int)
 
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
@@ -77,7 +77,6 @@ def get_args_parser():
                         help="weight (coeffficient) about bbox offset reggresion loss")
     parser.add_argument('--wh_loss_coef', default=1, type=float,
                         help="weight (coeffficient) about bbox width/height loss")
-
 
     # tracking
     parser.add_argument('--checkpoint', default="", type=str)
@@ -97,6 +96,8 @@ def get_args_parser():
                         help='the factor to penalize the change of size')
     parser.add_argument('--tracking_size_lpf', default=0.33, type=float,
                         help='the factor of the lpf for size tracking')
+    parser.add_argument('--dcf_rate', default=0.5, type=float,
+                        help='the weight for integrate dcf and trtr for heatmap ')
 
     parser.add_argument('--dataset_path', default="", type=str, help='path of datasets')
     parser.add_argument('--dataset', type=str, help='the benchmark', default="VOT2018")
@@ -135,7 +136,7 @@ def main(args, tracker):
                     continue
 
             video_total_lost = 0
-            for cnt in range(args.vot_repetition):
+            for cnt in range(args.repetition):
                 frame_counter = 0
                 lost_number = 0
                 toc = 0
@@ -242,10 +243,10 @@ def main(args, tracker):
                         v_idx+1, cnt+1, video.name, toc, idx / toc, lost_number))
                 video_total_lost += lost_number
             total_lost += video_total_lost
-            if args.vot_repetition > 1:
-                print('({:3d}) Video: {:12s} Avg Lost: {:.3f}'.format(v_idx+1, video.name, video_total_lost/args.vot_repetition))
+            if args.repetition > 1:
+                print('({:3d}) Video: {:12s} Avg Lost: {:.3f}'.format(v_idx+1, video.name, video_total_lost/args.repetition))
 
-        print("{:s} total (avg) lost: {:.3f}".format(model_name, total_lost/args.vot_repetition))
+        print("{:s} total (avg) lost: {:.3f}".format(model_name, total_lost/args.repetition))
     else:
         # OPE tracking
         for v_idx, video in enumerate(dataset):
@@ -253,108 +254,87 @@ def main(args, tracker):
                 # test one special video
                 if video.name != args.video:
                     continue
-            toc = 0
-            pred_bboxes = []
-            scores = []
-            track_times = []
-            template_image = None
-            search_image = None
-            raw_heatmap = None
-            post_heatmap = None
 
-            for idx, (img, gt_bbox) in enumerate(video):
-                tic = cv2.getTickCount()
-                if idx == 0:
-                    tracker.init(img, gt_bbox)
-                    pred_bbox = gt_bbox
-                    scores.append(None)
-                    if 'VOT2018-LT' == args.dataset:
-                        pred_bboxes.append([1])
-                    else:
+            for cnt in range(args.repetition):
+                toc = 0
+                pred_bboxes = []
+                scores = []
+                track_times = []
+                template_image = None
+                search_image = None
+                raw_heatmap = None
+                post_heatmap = None
+
+                for idx, (img, gt_bbox) in enumerate(video):
+                    tic = cv2.getTickCount()
+                    if idx == 0:
+                        tracker.init(img, gt_bbox)
+                        pred_bbox = gt_bbox
+                        scores.append(None)
                         pred_bboxes.append(pred_bbox)
-                else:
-                    outputs = tracker.track(img)
-                    pred_bbox_ = outputs['bbox']
-                    pred_bbox = [pred_bbox_[0], pred_bbox_[1],
-                                 pred_bbox_[2] - pred_bbox_[0],
-                                 pred_bbox_[3] - pred_bbox_[1]]
-                    pred_bboxes.append(pred_bbox)
-                    scores.append(outputs['score'])
-
-                toc += cv2.getTickCount() - tic
-                track_times.append((cv2.getTickCount() - tic)/cv2.getTickFrequency())
-                if idx == 0:
-                    if args.vis:
-                        cv2.destroyAllWindows()
-                if args.vis and idx > 0:
-                    gt_bbox = list(map(int, gt_bbox))
-                    pred_bbox = list(map(int, pred_bbox))
-                    cv2.rectangle(img, (gt_bbox[0], gt_bbox[1]),
-                                  (gt_bbox[0]+gt_bbox[2], gt_bbox[1]+gt_bbox[3]), (0, 255, 0), 3)
-                    cv2.rectangle(img, (pred_bbox[0], pred_bbox[1]),
-                                  (pred_bbox[0]+pred_bbox[2], pred_bbox[1]+pred_bbox[3]), (0, 255, 255), 3)
-                    cv2.putText(img, str(idx), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-                    cv2.imshow(video.name, img)
-
-                    if args.debug_vis:
-                        debug_images = ['template_image', 'prev_template_image', 'search_image', 'raw_heatmap', 'post_heatmap', 'atom_heatmap']
-                        for image in debug_images:
-                            if image in outputs and outputs[image] is not None:
-                                cv2.imshow(image, outputs[image])
-
-                        k = cv2.waitKey(0)
-                        if k == 27:         # wait for ESC key to exit
-                            sys.exit()
                     else:
-                        cv2.waitKey(1)
-                else:
-                    sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
+                        outputs = tracker.track(img)
+                        pred_bbox_ = outputs['bbox']
+                        pred_bbox = [pred_bbox_[0], pred_bbox_[1],
+                                     pred_bbox_[2] - pred_bbox_[0],
+                                     pred_bbox_[3] - pred_bbox_[1]]
+                        pred_bboxes.append(pred_bbox)
+                        scores.append(outputs['score'])
 
-            toc /= cv2.getTickFrequency()
-            # save results
-            if 'VOT2018-LT' == args.dataset:
-                video_path = os.path.join(args.result_path, args.dataset, model_name,
-                        'longterm', video.name)
-                if not os.path.isdir(video_path):
-                    os.makedirs(video_path)
-                result_path = os.path.join(video_path,
-                        '{}_001.txt'.format(video.name))
-                with open(result_path, 'w') as f:
-                    for x in pred_bboxes:
-                        f.write(','.join([str(i) for i in x])+'\n')
-                result_path = os.path.join(video_path,
-                        '{}_001_confidence.value'.format(video.name))
-                with open(result_path, 'w') as f:
-                    for x in scores:
-                        f.write('\n') if x is None else f.write("{:.6f}\n".format(x))
-                result_path = os.path.join(video_path,
-                        '{}_time.txt'.format(video.name))
-                with open(result_path, 'w') as f:
-                    for x in track_times:
-                        f.write("{:.6f}\n".format(x))
-            elif 'GOT-10k' == args.dataset:
-                video_path = os.path.join(args.result_path, args.dataset, model_name, video.name)
-                if not os.path.isdir(video_path):
-                    os.makedirs(video_path)
-                result_path = os.path.join(video_path, '{}_001.txt'.format(video.name))
-                with open(result_path, 'w') as f:
-                    for x in pred_bboxes:
-                        f.write(','.join([str(i) for i in x])+'\n')
-                result_path = os.path.join(video_path,
-                        '{}_time.txt'.format(video.name))
-                with open(result_path, 'w') as f:
-                    for x in track_times:
-                        f.write("{:.6f}\n".format(x))
-            else:
-                model_path = os.path.join(args.result_path, args.dataset, model_name)
-                if not os.path.isdir(model_path):
-                    os.makedirs(model_path)
-                result_path = os.path.join(model_path, '{}.txt'.format(video.name))
-                with open(result_path, 'w') as f:
-                    for x in pred_bboxes:
-                        f.write(','.join([str(i) for i in x])+'\n')
-            print('({:3d}) Video: {:12s} Time: {:5.1f}s Speed: {:3.1f}fps'.format(
-                v_idx+1, video.name, toc, idx / toc))
+                    toc += cv2.getTickCount() - tic
+                    track_times.append((cv2.getTickCount() - tic)/cv2.getTickFrequency())
+                    if idx == 0:
+                        if args.vis:
+                            cv2.destroyAllWindows()
+                    if args.vis and idx > 0:
+                        gt_bbox = list(map(lambda x: int(x) if not np.isnan(x) else 0, gt_bbox))
+                        pred_bbox = list(map(int, pred_bbox))
+                        cv2.rectangle(img, (gt_bbox[0], gt_bbox[1]),
+                                      (gt_bbox[0]+gt_bbox[2], gt_bbox[1]+gt_bbox[3]), (0, 255, 0), 3)
+                        cv2.rectangle(img, (pred_bbox[0], pred_bbox[1]),
+                                      (pred_bbox[0]+pred_bbox[2], pred_bbox[1]+pred_bbox[3]), (0, 255, 255), 3)
+                        cv2.putText(img, str(idx), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                        cv2.imshow(video.name, img)
+
+                        if args.debug_vis:
+                            for key, value in outputs.items():
+                                if isinstance(value, np.ndarray):
+                                    if len(value.shape) == 3 or len(value.shape) == 2:
+                                        cv2.imshow(key, value)
+
+                            k = cv2.waitKey(0)
+                            if k == 27:         # wait for ESC key to exit
+                                sys.exit()
+                        else:
+                            cv2.waitKey(1)
+                    else:
+                        sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
+
+                toc /= cv2.getTickFrequency()
+                # save results
+                if 'GOT-10k' == args.dataset:
+                    video_path = os.path.join(args.result_path, args.dataset, model_name, video.name)
+                    if not os.path.isdir(video_path):
+                        os.makedirs(video_path)
+                    result_path = os.path.join(video_path, '{}_{:03d}.txt'.format(video.name, cnt+1))
+                    with open(result_path, 'w') as f:
+                        for x in pred_bboxes:
+                            f.write(','.join([vot_float2str("%.4f", i) for i in x ])+'\n')
+                    result_path = os.path.join(video_path,
+                            '{}_time.txt'.format(video.name))
+                    with open(result_path, 'w') as f:
+                        for x in track_times:
+                            f.write("{:.6f}\n".format(x))
+                else:
+                    model_path = os.path.join(args.result_path, args.dataset, model_name)
+                    if not os.path.isdir(model_path):
+                        os.makedirs(model_path)
+                    result_path = os.path.join(model_path, '{}.txt'.format(video.name))
+                    with open(result_path, 'w') as f:
+                        for x in pred_bboxes:
+                            f.write(','.join([vot_float2str("%.4f", i) for i in x])+'\n')
+                print('({:3d}) Video: {:12s} Time: {:5.1f}s Speed: {:3.1f}fps'.format(
+                    v_idx+1, video.name, toc, idx / toc))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Benchmark dataset inference', parents=[get_args_parser()])

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import numpy as np
 
 from PIL import Image
@@ -15,16 +16,11 @@ class OTBVideo(Video):
     Args:
         name: video name
         root: dataset root
-        video_dir: video directory
-        init_rect: init rectangle
         img_names: image names
         gt_rect: groundtruth rectangle
-        attr: attribute of video
     """
-    def __init__(self, name, root, video_dir, init_rect, img_names,
-            gt_rect, attr, load_img=False):
-        super(OTBVideo, self).__init__(name, root, video_dir,
-                init_rect, img_names, gt_rect, attr, load_img)
+    def __init__(self, name, root, gt_rects, img_names, load_img=False):
+        super(OTBVideo, self).__init__(name, root, name, gt_rects[0], img_names, gt_rects, None, load_img)
 
     def load_tracker(self, path, tracker_names=None, store=True):
         """
@@ -39,38 +35,16 @@ class OTBVideo(Video):
             tracker_names = [tracker_names]
         for name in tracker_names:
             traj_file = os.path.join(path, name, self.name+'.txt')
-            if not os.path.exists(traj_file):
-                if self.name == 'FleetFace':
-                    txt_name = 'fleetface.txt'
-                elif self.name == 'Jogging-1':
-                    txt_name = 'jogging_1.txt'
-                elif self.name == 'Jogging-2':
-                    txt_name = 'jogging_2.txt'
-                elif self.name == 'Skating2-1':
-                    txt_name = 'skating2_1.txt'
-                elif self.name == 'Skating2-2':
-                    txt_name = 'skating2_2.txt'
-                elif self.name == 'FaceOcc1':
-                    txt_name = 'faceocc1.txt'
-                elif self.name == 'FaceOcc2':
-                    txt_name = 'faceocc2.txt'
-                elif self.name == 'Human4-2':
-                    txt_name = 'human4_2.txt'
+            assert os.path.exists(traj_file)
+            with open(traj_file, 'r') as f :
+                pred_traj = [list(map(float, x.strip().split(',')))
+                        for x in f.readlines()]
+                if len(pred_traj) != len(self.gt_traj):
+                    print(name, len(pred_traj), len(self.gt_traj), self.name)
+                if store:
+                    self.pred_trajs[name] = pred_traj
                 else:
-                    txt_name = self.name[0].lower()+self.name[1:]+'.txt'
-                traj_file = os.path.join(path, name, txt_name)
-            if os.path.exists(traj_file):
-                with open(traj_file, 'r') as f :
-                    pred_traj = [list(map(float, x.strip().split(',')))
-                            for x in f.readlines()]
-                    if len(pred_traj) != len(self.gt_traj):
-                        print(name, len(pred_traj), len(self.gt_traj), self.name)
-                    if store:
-                        self.pred_trajs[name] = pred_traj
-                    else:
-                        return pred_traj
-            else:
-                print(traj_file)
+                    return pred_traj
         self.tracker_names = list(self.pred_trajs.keys())
 
 
@@ -82,38 +56,55 @@ class OTBDataset(Dataset):
         dataset_root: dataset root
         load_img: wether to load all imgs
     """
-    def __init__(self, name, dataset_root, load_img=False):
+    def __init__(self, name, dataset_root, load_img=False, single_video=None):
         super(OTBDataset, self).__init__(name, dataset_root)
-        with open(os.path.join(dataset_root, name+'.json'), 'r') as f:
-            meta_data = json.load(f)
+
+        dataset_dir =  os.path.join(dataset_root, 'dataset', 'test')
+        video_names = [x for x in  os.listdir(dataset_dir) if '__MACOSX' not in x]
+
 
         # load videos
-        pbar = tqdm(meta_data.keys(), desc='loading '+name, ncols=100)
+        pbar = tqdm(video_names, desc='loading '+name, ncols=100)
         self.videos = {}
         for video in pbar:
 
-            if not os.path.isdir(os.path.join(dataset_root, video)):
+            if not os.path.isdir(os.path.join(dataset_dir, video)):
                 continue
 
-            pbar.set_postfix_str(video)
-            self.videos[video] = OTBVideo(video,
-                                          dataset_root,
-                                          meta_data[video]['video_dir'],
-                                          meta_data[video]['init_rect'],
-                                          meta_data[video]['img_names'],
-                                          meta_data[video]['gt_rect'],
-                                          meta_data[video]['attr'],
-                                          load_img)
+            anno_files = glob(os.path.join(dataset_dir, video, 'groundtruth_rect.*'))
+            # need to copy Jogging to Jogging-1 and Jogging-2, and copy Skating2 to Skating2-1 and Skating2-2 or using softlink)
+            for idx, anno_file in enumerate(anno_files):
+
+                video_name = video
+                if len(anno_files) > 1:
+                    if not video == 'Human4':
+                        video_name = video_name + '-' + str(idx+1)
+
+
+                if single_video and single_video != video_name:
+                    continue
+
+                img_names = sorted(glob(os.path.join(dataset_dir, video, 'img', '*.jpg')), key=lambda x:int(os.path.basename(x).split('.')[0]))
+
+
+                with open(anno_file, 'r') as f:
+                    gt_rects = [list(map(float, re.split('[,\t ]', x.strip()))) for x in f.readlines()]
+
+
+
+                if len(img_names) > len(gt_rects):
+                    if video_name == 'David':
+                        img_names = img_names[len(img_names) - len(gt_rects):]
+                    else:
+                        img_names = img_names[0:len(gt_rects)]
+
+
+                if len(gt_rects) == 0: # corner case of Human4
+                    continue
+
+                pbar.set_postfix_str(video_name)
+                self.videos[video_name] = OTBVideo(video_name, dataset_root, gt_rects, img_names)
 
         # set attr
-        attr = []
-        for x in self.videos.values():
-            attr += x.attr
-        attr = set(attr)
         self.attr = {}
         self.attr['ALL'] = list(self.videos.keys())
-        for x in attr:
-            self.attr[x] = []
-        for k, v in self.videos.items():
-            for attr_ in v.attr:
-                self.attr[attr_].append(k)

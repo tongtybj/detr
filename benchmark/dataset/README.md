@@ -1,34 +1,42 @@
 # Testing dataset directory
-# putting your testing dataset here
-- [x] [VOT2016](http://www.votchallenge.net/vot2016/dataset.html)
-- [x] [VOT2018](http://www.votchallenge.net/vot2018/dataset.html)
-- [x] [VOT2018-LT](http://www.votchallenge.net/vot2018/dataset.html)
-- [x] [OTB100(OTB2015)](http://cvlab.hanyang.ac.kr/tracker_benchmark/datasets.html)
-- [x] [UAV123](https://ivul.kaust.edu.sa/Pages/Dataset-UAV123.aspx)
-- [x] [NFS](http://ci2cv.net/nfs/index.html)
-- [x] [LaSOT](https://cis.temple.edu/lasot/)
-- [ ] [TrackingNet (Evaluation on Server)](https://tracking-net.org)
-- [ ] [GOT-10k (Evaluation on Server)](http://got-10k.aitestunion.com)
+## Benchmarks
+-  [VOT](http://www.votchallenge.net/)
+-  [OTB](http://cvlab.hanyang.ac.kr/tracker_benchmark/datasets.html)
+-  [UAV123](https://ivul.kaust.edu.sa/Pages/Dataset-UAV123.aspx)
+-  [NFS](http://ci2cv.net/nfs/index.html)
+-  [LaSOT](https://cis.temple.edu/lasot/)
+-  [TrackingNet (Evaluation on Server)](https://tracking-net.org)
+-  [GOT-10k (Evaluation on Server)](http://got-10k.aitestunion.com)
 
 ## Download Dataset
-Download json files used in our toolkit [baidu pan](https://pan.baidu.com/s/1js0Qhykqqur7_lNRtle1tA)
 
-1. Put CVRP13.json, OTB100.json, OTB50.json in OTB100 dataset directory (you need to copy Jogging to Jogging-1 and Jogging-2, and copy Skating2 to Skating2-1 and Skating2-2 or using softlink)
+### VOT
+Please read README.md in `benchmark/VOT`
 
-   The directory should have the below format
+### OTB (OTB100)
 
-   | -- OTB100/
+Please read README.md in `benchmark/OTB`
 
-   ​	| -- Basketball
+### UAV (UAV123)
 
-   ​	| 	......
+Please read README.md in `benchmark/UAV`
 
-   ​	| -- Woman
+### NFS (NFS30)
 
-   ​	| -- OTB100.json
+Please read README.md in `benchmark/NFS`
 
-   ​	| -- OTB50.json
+### TrackingNet
 
-   ​	| -- CVPR13.json
+- Please read README.md in `benchmark/TrackingNet`
+- Please submit the tracking result as `.zip` file to the organization. Please follow [the official instruction](https://github.com/SilvioGiancola/TrackingNet-devkit)
 
-2. Put all other jsons in the dataset directory like in step 1
+### LaSOT
+- Please **manually** download the test dataset from https://drive.google.com/file/d/1EpeWYN4Li7eTvzTYg-B917S7RWNbwzHv/view
+- Please **manually** unzip the dataset
+- Please **manually** create a symbolic link: `benchmark/dataset/LaSOT`
+- Please submit the tracking result as `.zip` file to the organization. Please follow [the official instruction](http://got-10k.aitestunion.com/submit_instructions)
+
+### GOT-10K
+- Please **manually** download the test dataset `Test data only` from http://got-10k.aitestunion.com/downloads
+- Please **manually** unzip the dataset
+- Please **manually** create a symbolic link: `benchmark/dataset/GOT-10k`: `ln -s ${PWD}/test GOT-10k`

@@ -12,10 +12,8 @@ from multiprocessing import Pool
 
 import sys
 sys.path.append('..')
-from toolkit.datasets import OTBDataset, UAVDataset, LaSOTDataset, \
-        VOTDataset, NFSDataset, VOTLTDataset
-from toolkit.evaluation import OPEBenchmark, AccuracyRobustnessBenchmark, \
-        EAOBenchmark, F1Benchmark
+from toolkit.datasets import OTBDataset, UAVDataset, LaSOTDataset, VOTDataset, NFSDataset
+from toolkit.evaluation import OPEBenchmark, AccuracyRobustnessBenchmark, EAOBenchmark, F1Benchmark
 
 def get_args_parser():
     parser = argparse.ArgumentParser('benchmark dataset inference', add_help=False)

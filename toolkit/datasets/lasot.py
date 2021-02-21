@@ -13,16 +13,12 @@ class LaSOTVideo(Video):
     Args:
         name: video name
         root: dataset root
-        video_dir: video directory
-        init_rect: init rectangle
         img_names: image names
         gt_rect: groundtruth rectangle
-        attr: attribute of video
+        absent: abnset attribute of video
     """
-    def __init__(self, name, root, video_dir, init_rect, img_names,
-            gt_rect, attr, absent, load_img=False):
-        super(LaSOTVideo, self).__init__(name, root, video_dir,
-                init_rect, img_names, gt_rect, attr, load_img)
+    def __init__(self, name, root, gt_rects, img_names, absent, load_img=False):
+        super(LaSOTVideo, self).__init__(name, root, name, gt_rects[0], img_names, gt_rects, None, load_img)
         self.absent = np.array(absent, np.int8)
 
     def load_tracker(self, path, tracker_names=None, store=True):
@@ -44,8 +40,7 @@ class LaSOTVideo(Video):
                             for x in f.readlines()]
             else:
                 print("File not exists: ", traj_file)
-            if self.name == 'monkey-17':
-                pred_traj = pred_traj[:len(self.gt_traj)]
+
             if store:
                 self.pred_trajs[name] = pred_traj
             else:
@@ -53,48 +48,48 @@ class LaSOTVideo(Video):
         self.tracker_names = list(self.pred_trajs.keys())
 
 
-
 class LaSOTDataset(Dataset):
     """
     Args:
-        name: dataset name, should be 'OTB100', 'CVPR13', 'OTB50'
+        name: dataset name, should be 'LaSOT'
         dataset_root: dataset root
         load_img: wether to load all imgs
     """
-    def __init__(self, name, dataset_root, load_img=False):
+    def __init__(self, name, dataset_root, load_img=False, single_video=None):
         super(LaSOTDataset, self).__init__(name, dataset_root)
-        with open(os.path.join(dataset_root, name+'.json'), 'r') as f:
-            meta_data = json.load(f)
 
         # load videos
-        pbar = tqdm(meta_data.keys(), desc='loading '+name, ncols=100)
+        with open(os.path.join(dataset_root, 'testing_set.txt'), 'r') as f:
+            video_names = f.read().splitlines()
+
+        pbar = tqdm(video_names, desc='loading '+name, ncols=100)
+
         self.videos = {}
         for video in pbar:
+
+            if single_video and single_video != video:
+                continue
 
             if not os.path.isdir(os.path.join(dataset_root, video)):
                 continue
 
             pbar.set_postfix_str(video)
-            self.videos[video] = LaSOTVideo(video,
-                                          dataset_root,
-                                          meta_data[video]['video_dir'],
-                                          meta_data[video]['init_rect'],
-                                          meta_data[video]['img_names'],
-                                          meta_data[video]['gt_rect'],
-                                          meta_data[video]['attr'],
-                                          meta_data[video]['absent'])
+
+            with open(os.path.join(dataset_root, video, 'groundtruth.txt'), 'r') as f:
+                gt_rects = [list(map(float, x.strip().split(','))) for x in f.readlines()]
+            img_names = [os.path.join(video, 'img', os.path.basename(x)) for x in sorted(glob(os.path.join(dataset_root, video, 'img', '*.jpg')), key=lambda x:int(os.path.basename(x).split('.')[0]))]
+
+            try:
+                with open(os.path.join(dataset_root, video, 'out_of_view.txt'), 'r') as f:
+                    absent = [int(v) for v in f.read().splitlines()]
+                    assert len(absent) == len(img_names)
+            except:
+                absent = [0] * len(img_names)
+
+            self.videos[video] = LaSOTVideo(video, dataset_root, gt_rects, img_names, absent)
 
         # set attr
-        attr = []
-        for x in self.videos.values():
-            attr += x.attr
-        attr = set(attr)
         self.attr = {}
         self.attr['ALL'] = list(self.videos.keys())
-        for x in attr:
-            self.attr[x] = []
-        for k, v in self.videos.items():
-            for attr_ in v.attr:
-                self.attr[attr_].append(k)
 
 
