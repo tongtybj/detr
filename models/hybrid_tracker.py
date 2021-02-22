@@ -5,6 +5,7 @@ import sys
 import os
 import cv2
 import numpy as np
+import copy
 
 import torch
 import torch.nn.functional as F
@@ -75,7 +76,6 @@ class Tracker():
         self.target_pos = torch.Tensor([bbox[1] + bbox[3]/2, bbox[0] + bbox[2]/2]) # center
         self.target_sz = torch.Tensor([bbox[3], bbox[2]]) # real size in pixel
 
-
         # TrTr
         bbox_xyxy  = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
         channel_avg = np.mean(image, axis=(0, 1))
@@ -99,6 +99,20 @@ class Tracker():
         self.init_template = self.image_normalize(np.round(template_image).astype(np.uint8)).cuda()
         self.first_frame = True
 
+        self.dcf_init(image, channel_avg, scale_z)
+
+        self.init_image = image
+        self.init_channel_avg = channel_avg
+        self.init_sacle_z = scale_z
+        self.init_target_sz = self.target_sz
+
+        self.invliad_bbox_cnt = 0
+        self.invliad_bbox_cnt_max = 5 # parameter
+        self.boundary_margin = 0.01 # parameter: pixel? (300 -> 3)
+        self.invliad_bbox_score_thresh = 0.1 # parameter
+
+
+    def dcf_init(self, image, channel_avg, scale_z):
 
         # Initialize some stuff
         self.dcf_frame_num = 1
@@ -146,14 +160,6 @@ class Tracker():
         start = time.time()
         self.dcf_init_optimization(train_x, init_y)
         #print("init optimization time: {}".format(time.time() - start))
-
-    def _bbox_clip(self, bbox, boundary):
-        x1 = max(0, bbox[0])
-        y1 = max(0, bbox[1])
-        x2 = min(boundary[1], bbox[2])
-        y2 = min(boundary[0], bbox[3])
-
-        return [x1, y1, x2, y2]
 
     def dcf_init_optimization(self, train_x, init_y):
         # Initialize filter
@@ -206,6 +212,18 @@ class Tracker():
         # Free memory
         del self.dcf_init_training_samples
         del self.dcf_joint_problem, self.dcf_joint_optimizer
+
+        self.init_dcf_filter = copy.deepcopy(self.dcf_filter)
+        self.init_dcf_filter_optimizer_residuals = copy.deepcopy(self.dcf_filter_optimizer.residuals)
+        self.init_dcf_filter_optimizer_losses = copy.deepcopy(self.dcf_filter_optimizer.losses)
+
+    def _bbox_clip(self, bbox, boundary):
+        x1 = max(0, bbox[0])
+        y1 = max(0, bbox[1])
+        x2 = min(boundary[1]-1, bbox[2])
+        y2 = min(boundary[0]-1, bbox[3])
+
+        return [x1, y1, x2, y2]
 
     def track(self, image):
 
@@ -446,12 +464,49 @@ class Tracker():
         # clip boundary
         bbox = [cx - width / 2, cy - height / 2,
                 cx + width / 2, cy + height / 2]
+
+        #print(width, height, torch.max(heatmap))
+        margin = np.array(img_shape) * self.boundary_margin
+        if bbox[0] <= margin[1] or bbox[1] < margin[0] or bbox[2] > img_shape[1]-1 - margin[1] or bbox[3] > img_shape[0]-1 - margin[0]:
+            self.invliad_bbox_cnt += 1
+            #print("boundary!!! max_heatmap score from trtr: {}, count: {}, margin: {}".format(torch.max(heatmap), self.invliad_bbox_cnt, margin))
+            if self.invliad_bbox_cnt > self.invliad_bbox_cnt_max and torch.max(heatmap) < self.invliad_bbox_score_thresh:
+                # TODO: also consider the width and height of the invalid bbox
+                # TODO: use larget search area for re-tracking
+
+                # reset the dcf optimizer
+                self.dcf_filter_optimizer.residuals = self.init_dcf_filter_optimizer_residuals
+                self.dcf_filter_optimizer.losses = self.init_dcf_filter_optimizer_losses
+                self.dcf_filter = copy.deepcopy(self.init_dcf_filter)
+
+                self.dcf_num_stored_samples = self.dcf_num_init_samples.copy()
+                self.dcf_previous_replace_ind = [None] * len(self.dcf_num_stored_samples)
+                for train_samp, y_memory, sw, init_sw, num in zip(self.dcf_training_samples, self.dcf_y, self.dcf_sample_weights, self.dcf_init_sample_weights, self.dcf_num_init_samples):
+                    train_samp[num:] = 0
+                    y_memory[num:] = 0
+                    sw[:num] = init_sw
+                    sw[num:] = 0
+
+
+                self.target_sz = self.init_target_sz
+                self.target_pos = torch.Tensor([img_shape[0]/2, img_shape[1]/2]) # center of image
+
+                print("reset the tracker becuase of bbox near boundary. max_heatmap score from trtr: {}, count: {}".format(torch.max(heatmap), self.invliad_bbox_cnt))
+
+                self.invliad_bbox_cnt = 0
+
+                return {
+                    'bbox': bbox,
+                    'score': best_score,
+                }
+        else:
+            self.invliad_bbox_cnt = 0
+
         bbox = self._bbox_clip(bbox, img_shape)
 
         # udpate state ([y,x])
         self.target_pos = torch.Tensor([(bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2])
         self.target_sz = torch.Tensor([bbox[3] - bbox[1], bbox[2] - bbox[0]])
-
 
         # debug for search image:
         debug_bbox = torch.round(box_cxcywh_to_xyxy(torch.cat([bbox_ct, bbox_wh * scale_z]))).int()

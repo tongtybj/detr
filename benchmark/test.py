@@ -223,8 +223,8 @@ def main(args, tracker):
                                 sys.exit()
                         else:
                             cv2.waitKey(1)
-                    elif not args.vis:
-                        sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
+
+                    sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
 
                 toc /= cv2.getTickFrequency()
                 # save results
@@ -264,6 +264,7 @@ def main(args, tracker):
                 search_image = None
                 raw_heatmap = None
                 post_heatmap = None
+                lost_number = 0
 
                 for idx, (img, gt_bbox) in enumerate(video):
                     tic = cv2.getTickCount()
@@ -286,29 +287,36 @@ def main(args, tracker):
                     if idx == 0:
                         if args.vis:
                             cv2.destroyAllWindows()
-                    if args.vis and idx > 0:
-                        gt_bbox = list(map(lambda x: int(x) if not np.isnan(x) else 0, gt_bbox))
-                        pred_bbox = list(map(int, pred_bbox))
-                        cv2.rectangle(img, (gt_bbox[0], gt_bbox[1]),
-                                      (gt_bbox[0]+gt_bbox[2], gt_bbox[1]+gt_bbox[3]), (0, 255, 0), 3)
-                        cv2.rectangle(img, (pred_bbox[0], pred_bbox[1]),
-                                      (pred_bbox[0]+pred_bbox[2], pred_bbox[1]+pred_bbox[3]), (0, 255, 255), 3)
-                        cv2.putText(img, str(idx), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-                        cv2.imshow(video.name, img)
-
-                        if args.debug_vis:
-                            for key, value in outputs.items():
-                                if isinstance(value, np.ndarray):
-                                    if len(value.shape) == 3 or len(value.shape) == 2:
-                                        cv2.imshow(key, value)
-
-                            k = cv2.waitKey(0)
-                            if k == 27:         # wait for ESC key to exit
-                                sys.exit()
-                        else:
-                            cv2.waitKey(1)
                     else:
-                        sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
+                        if not gt_bbox == [0,0,0,0] and not np.isnan(np.array(gt_bbox)).any():
+                            if pred_bbox[0] + pred_bbox[2] < gt_bbox[0] or pred_bbox[0] > gt_bbox[0] + gt_bbox[2] or pred_bbox[1] + pred_bbox[3] < gt_bbox[1] or pred_bbox[1] > gt_bbox[1] + gt_bbox[3]:
+                                lost_number += 1
+                        else:
+                            print("unknown gt bbox: ", gt_bbox)
+
+                        if args.vis or args.debug_vis:
+                            gt_bbox = list(map(lambda x: int(x) if not np.isnan(x) else 0, gt_bbox))
+                            pred_bbox = list(map(int, pred_bbox))
+                            cv2.rectangle(img, (gt_bbox[0], gt_bbox[1]),
+                                          (gt_bbox[0]+gt_bbox[2], gt_bbox[1]+gt_bbox[3]), (0, 255, 0), 3)
+                            cv2.rectangle(img, (pred_bbox[0], pred_bbox[1]),
+                                          (pred_bbox[0]+pred_bbox[2], pred_bbox[1]+pred_bbox[3]), (0, 255, 255), 3)
+                            cv2.putText(img, str(idx), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                            cv2.imshow(video.name, img)
+
+                            if args.debug_vis:
+                                for key, value in outputs.items():
+                                    if isinstance(value, np.ndarray):
+                                        if len(value.shape) == 3 or len(value.shape) == 2:
+                                            cv2.imshow(key, value)
+
+                                k = cv2.waitKey(0)
+                                if k == 27:         # wait for ESC key to exit
+                                    sys.exit()
+                            else:
+                                cv2.waitKey(1)
+
+                    sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
 
                 toc /= cv2.getTickFrequency()
                 # save results
@@ -333,8 +341,8 @@ def main(args, tracker):
                     with open(result_path, 'w') as f:
                         for x in pred_bboxes:
                             f.write(','.join([vot_float2str("%.4f", i) for i in x])+'\n')
-                print('({:3d}) Video: {:12s} Time: {:5.1f}s Speed: {:3.1f}fps'.format(
-                    v_idx+1, video.name, toc, idx / toc))
+                print('({:3d}) Video: {:12s} Time: {:5.1f}s Speed: {:3.1f}fps Lost: {:d}/{:d}'.format(
+                    v_idx+1, video.name, toc, idx / toc, lost_number, len(video)))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Benchmark dataset inference', parents=[get_args_parser()])

@@ -35,6 +35,8 @@ class OTBVideo(Video):
             tracker_names = [tracker_names]
         for name in tracker_names:
             traj_file = os.path.join(path, name, self.name+'.txt')
+            if not os.path.exists(traj_file):
+                raise ValueError("{}".format(self.name, traj_file))
             assert os.path.exists(traj_file)
             with open(traj_file, 'r') as f :
                 pred_traj = [list(map(float, x.strip().split(',')))
