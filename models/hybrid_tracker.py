@@ -111,6 +111,7 @@ class Tracker():
         self.invliad_bbox_cnt_max = 5 # parameter
         self.invliad_bbox_score_cnt_max = 1 # parameter
         self.boundary_margin = 0.01 # parameter: pixel? (300 -> 3)
+        self.size_margin = 0.02 # parameter: pixel? (300 -> 6)
         self.invliad_bbox_score_thresh = 0.1 # parameter
 
 
@@ -471,7 +472,18 @@ class Tracker():
         margin = np.array(img_shape) * self.boundary_margin
         if bbox[0] <= margin[1] or bbox[1] < margin[0] or bbox[2] > img_shape[1]-1 - margin[1] or bbox[3] > img_shape[0]-1 - margin[0]:
             self.invliad_bbox_cnt += 1
-            #print("boundary!!! max_heatmap score from trtr: {}, count: {}, margin: {}".format(torch.max(heatmap), self.invliad_bbox_cnt, margin))
+            #print("boundary!!! max_heatmap score from trtr: {}, count: {}, margin: {}, size: {}".format(torch.max(heatmap), self.invliad_bbox_cnt, margin, [width, height]))
+
+            flag = False
+
+            # too small bbox
+            if bbox[0] <= margin[1] or bbox[2] > img_shape[1]-1 - margin[1]:
+                if width <= self.size_margin * img_shape[1]:
+                    flag = True
+            if bbox[1] <= margin[0] or bbox[3] > img_shape[0]-1 - margin[0]:
+                if height <= self.size_margin * img_shape[0]:
+                    flag = True
+
 
             if self.invliad_bbox_cnt > self.invliad_bbox_cnt_max:
 
@@ -482,36 +494,38 @@ class Tracker():
                     self.invliad_bbox_score_cnt = 0
                     self.invliad_bbox_cnt = 0
 
-                if self.invliad_bbox_score_cnt > self.invliad_bbox_score_cnt_max:
-                    # TODO: also consider the width and height of the invalid bbox
-                    # TODO: use larget search area for re-tracking
+            if self.invliad_bbox_score_cnt > self.invliad_bbox_score_cnt_max:
+                flag = True
 
-                    # reset the dcf optimizer
-                    self.dcf_filter_optimizer.residuals = self.init_dcf_filter_optimizer_residuals
-                    self.dcf_filter_optimizer.losses = self.init_dcf_filter_optimizer_losses
-                    self.dcf_filter = copy.deepcopy(self.init_dcf_filter)
+            if flag:
+                # TODO: use larget search area for re-tracking
 
-                    self.dcf_num_stored_samples = self.dcf_num_init_samples.copy()
-                    self.dcf_previous_replace_ind = [None] * len(self.dcf_num_stored_samples)
-                    for train_samp, y_memory, sw, init_sw, num in zip(self.dcf_training_samples, self.dcf_y, self.dcf_sample_weights, self.dcf_init_sample_weights, self.dcf_num_init_samples):
-                        train_samp[num:] = 0
-                        y_memory[num:] = 0
-                        sw[:num] = init_sw
-                        sw[num:] = 0
+                # reset the dcf optimizer
+                self.dcf_filter_optimizer.residuals = self.init_dcf_filter_optimizer_residuals
+                self.dcf_filter_optimizer.losses = self.init_dcf_filter_optimizer_losses
+                self.dcf_filter = copy.deepcopy(self.init_dcf_filter)
+
+                self.dcf_num_stored_samples = self.dcf_num_init_samples.copy()
+                self.dcf_previous_replace_ind = [None] * len(self.dcf_num_stored_samples)
+                for train_samp, y_memory, sw, init_sw, num in zip(self.dcf_training_samples, self.dcf_y, self.dcf_sample_weights, self.dcf_init_sample_weights, self.dcf_num_init_samples):
+                    train_samp[num:] = 0
+                    y_memory[num:] = 0
+                    sw[:num] = init_sw
+                    sw[num:] = 0
 
 
-                    self.target_sz = self.init_target_sz
-                    self.target_pos = torch.Tensor([img_shape[0]/2, img_shape[1]/2]) # center of image
+                self.target_sz = self.init_target_sz
+                self.target_pos = torch.Tensor([img_shape[0]/2, img_shape[1]/2]) # center of image
 
-                    print("reset the tracker becuase of bbox near boundary. max_heatmap score from trtr: {}, count: {}".format(torch.max(heatmap), self.invliad_bbox_cnt))
+                print("reset the tracker becuase of bbox near boundary. max_heatmap score from trtr: {}, count: {}".format(torch.max(heatmap), self.invliad_bbox_cnt))
 
-                    self.invliad_bbox_cnt = 0
-                    self.invliad_bbox_score_cnt = 0
+                self.invliad_bbox_cnt = 0
+                self.invliad_bbox_score_cnt = 0
 
-                    return {
-                        'bbox': bbox,
-                        'score': best_score,
-                    }
+                return {
+                    'bbox': bbox,
+                    'score': best_score,
+                }
         else:
             self.invliad_bbox_cnt = 0
 
