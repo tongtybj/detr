@@ -115,6 +115,7 @@ def get_args_parser():
                         help='step to test benchmark')
     parser.add_argument('--benchmark_start_epoch', default=0, type=int,
                         help='epoch to start benchmark')
+    parser.add_argument('--benchmark_dataset', default='VOT2018', type=str)
 
     return parser
 
@@ -189,10 +190,12 @@ def main(args):
     benchmark_test_args = benchmark_test_parser.parse_args()
     benchmark_test_args.result_path = Path(os.path.join(args.output_dir, 'benchmark'))
     benchmark_test_args.dataset_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'benchmark')
+    benchmark_test_args.dataset = args.benchmark_dataset
 
     benchmark_eval_parser = argparse.ArgumentParser('benchmark dataset inference', parents=[benchmark_eval.get_args_parser(), get_args_parser()],conflict_handler='resolve')
     benchmark_eval_args = benchmark_eval_parser.parse_args()
     benchmark_eval_args.tracker_path = benchmark_test_args.result_path
+    benchmark_eval_args.dataset = args.benchmark_dataset
     best_eao = 0
     best_ar = [0, 10] # accuracy & robustness
 
