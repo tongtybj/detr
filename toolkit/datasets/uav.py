@@ -66,10 +66,14 @@ class UAVDataset(Dataset):
                 continue
 
             img_names = sorted(glob(os.path.join(video_dir, '*.jpg')), key=lambda x:int(os.path.basename(x).split('.')[0]))
-            img_names = img_names[video_config[video][1]: video_config[video][2]]
+            img_names = img_names[video_config[video][1]-1: video_config[video][2]]
 
             with open(anno_files[idx], 'r') as f:
                 gt_rects = [list(map(float, x.strip().split(','))) for x in f.readlines()]
+
+            #workaround
+            img_names = img_names[1:]
+            gt_rects = gt_rects[1:]
 
             absent = [1 if np.isnan(np.array(rect)).any() else 0 for rect in gt_rects]
 
