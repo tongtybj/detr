@@ -79,12 +79,18 @@ class LaSOTDataset(Dataset):
                 gt_rects = [list(map(float, x.strip().split(','))) for x in f.readlines()]
             img_names = [os.path.join(video, 'img', os.path.basename(x)) for x in sorted(glob(os.path.join(dataset_root, video, 'img', '*.jpg')), key=lambda x:int(os.path.basename(x).split('.')[0]))]
 
-            try:
-                with open(os.path.join(dataset_root, video, 'out_of_view.txt'), 'r') as f:
-                    absent = [int(v) for v in f.read().splitlines()]
-                    assert len(absent) == len(img_names)
-            except:
-                absent = [0] * len(img_names)
+            absent = [0] * len(img_names)
+            f_name = os.path.join(dataset_root, video, 'out_of_view.txt')
+            if os.path.exists(f_name):
+                with open(f_name, 'r') as f:
+                    absent = [int(v) for v in f.read().split(",")]
+
+            f_name = os.path.join(dataset_root, video, 'full_occlusion.txt')
+            if os.path.exists(f_name):
+                with open(f_name, 'r') as f:
+                    for idx, v in enumerate(f.read().split(",")):
+                        if int(v) == 1:
+                            absent[idx] = 1
 
             self.videos[video] = LaSOTVideo(video, dataset_root, gt_rects, img_names, absent)
 

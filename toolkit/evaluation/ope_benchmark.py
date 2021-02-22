@@ -48,8 +48,8 @@ class OPEBenchmark:
                     #print("{}: reuse tracker: {}, traj: {}".format(video.name, tracker_name, tracker_traj))
                 n_frame = len(gt_traj)
                 if hasattr(video, 'absent'):
-                    gt_traj = gt_traj[video.absent == 1]
-                    tracker_traj = tracker_traj[video.absent == 1]
+                    gt_traj = gt_traj[video.absent == 0]
+                    tracker_traj = tracker_traj[video.absent == 0]
                 success_ret_[video.name] = success_overlap(gt_traj, tracker_traj, n_frame)
             success_ret[tracker_name] = success_ret_
         return success_ret
@@ -79,8 +79,8 @@ class OPEBenchmark:
                     tracker_traj = np.array(video.pred_trajs[tracker_name])
                 n_frame = len(gt_traj)
                 if hasattr(video, 'absent'):
-                    gt_traj = gt_traj[video.absent == 1]
-                    tracker_traj = tracker_traj[video.absent == 1]
+                    gt_traj = gt_traj[video.absent == 0]
+                    tracker_traj = tracker_traj[video.absent == 0]
                 gt_center = self.convert_bb_to_center(gt_traj)
                 tracker_center = self.convert_bb_to_center(tracker_traj)
                 thresholds = np.arange(0, 51, 1)
@@ -114,8 +114,8 @@ class OPEBenchmark:
                     tracker_traj = np.array(video.pred_trajs[tracker_name])
                 n_frame = len(gt_traj)
                 if hasattr(video, 'absent'):
-                    gt_traj = gt_traj[video.absent == 1]
-                    tracker_traj = tracker_traj[video.absent == 1]
+                    gt_traj = gt_traj[video.absent == 0]
+                    tracker_traj = tracker_traj[video.absent == 0]
                 gt_center_norm = self.convert_bb_to_norm_center(gt_traj, gt_traj[:, 2:4])
                 tracker_center_norm = self.convert_bb_to_norm_center(tracker_traj, gt_traj[:, 2:4])
                 thresholds = np.arange(0, 51, 1) / 100

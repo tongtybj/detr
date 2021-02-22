@@ -291,8 +291,8 @@ def main(args, tracker):
                         if not gt_bbox == [0,0,0,0] and not np.isnan(np.array(gt_bbox)).any():
                             if pred_bbox[0] + pred_bbox[2] < gt_bbox[0] or pred_bbox[0] > gt_bbox[0] + gt_bbox[2] or pred_bbox[1] + pred_bbox[3] < gt_bbox[1] or pred_bbox[1] > gt_bbox[1] + gt_bbox[3]:
                                 lost_number += 1
-                        else:
-                            print("unknown gt bbox: ", gt_bbox)
+                        # else:
+                        #     print("unknown gt bbox: ", gt_bbox)
 
                         if args.vis or args.debug_vis:
                             gt_bbox = list(map(lambda x: int(x) if not np.isnan(x) else 0, gt_bbox))
