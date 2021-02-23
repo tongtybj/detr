@@ -53,6 +53,13 @@ class NFSDataset(Dataset):
                 gt_rects = [[config[0], config[1], config[2]-config[0], config[3]-config[1]] for idx, config in enumerate(configs) if idx % 8 == 0]
                 absent = [int(config[5]) for idx, config in enumerate(configs) if idx % 8 == 0 ]
 
+                if video == 'dog_2':
+                    img_names = sorted(glob(os.path.join(dataset_dir, video, '240', video, '*.jpg')), key=lambda x:int(os.path.basename(x).split('.')[0]))
+                    img_names = [img for idx, img in enumerate(img_names) if idx % 8 == 0]
+
+
+            # TODO: pingpong_2 has wrong ground truth annotation, but do not inflence OPE??
+
             for idx, ab in enumerate(absent):
                 if ab == 1:
                     gt_rects[idx]  = [0, 0, 0, 0]
