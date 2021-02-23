@@ -241,7 +241,7 @@ def main(args):
         # evualute with benchmark
         if utils.is_main_process():
             if (epoch + 1) % args.benchmark_test_step == 0 and epoch > args.benchmark_start_epoch:
-                tracker = build_tracker(model_without_ddp, postprocessors["bbox"], benchmark_test_args)
+                tracker = build_tracker(benchmark_test_args, model = model_without_ddp, postprocessors = postprocessors)
                 benchmark_start_time = time.time()
                 benchmark_test.main(benchmark_test_args, tracker)
                 benchmark_time = time.time() - benchmark_start_time
@@ -285,7 +285,7 @@ def main(args):
 
                 inference_model.load_state_dict(model_without_ddp.state_dict())
                 inference_model.to(device)
-                tracker = build_tracker(inference_model, inference_postprocessors["bbox"], benchmark_test_args)
+                tracker = build_tracker(benchmark_test_args, model = inference_model, postprocessors = inference_postprocessors)
                 benchmark_start_time = time.time()
                 benchmark_test.main(benchmark_test_args, tracker)
                 benchmark_time = time.time() - benchmark_start_time

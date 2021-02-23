@@ -308,7 +308,7 @@ class Tracker(object):
             'prev_template_image': self.prev_rect_template_image # debug
         }
 
-def build_tracker(args):
+def build_tracker(args, model = None, postprocessors = None):
     if args.external_tracker:
         return build_external_tracker(args)
     else:
@@ -317,12 +317,12 @@ def build_tracker(args):
 
         device = torch.device('cuda')
 
-        assert args.transformer_mask # should be True
-        model, _, postprocessors = build_model(args)
+        if model is None or postprocessors is None:
+            model, _, postprocessors = build_model(args)
 
-        checkpoint = torch.load(args.checkpoint, map_location='cpu')
-        assert 'model' in checkpoint
-        model.load_state_dict(checkpoint['model'])
-        model.to(device)
+            checkpoint = torch.load(args.checkpoint, map_location='cpu')
+            assert 'model' in checkpoint
+            model.load_state_dict(checkpoint['model'])
+            model.to(device)
 
         return Tracker(model, postprocessors["bbox"], args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.multi_frame)
