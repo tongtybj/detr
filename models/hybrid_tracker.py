@@ -483,7 +483,8 @@ class Tracker():
             if bbox[1] <= margin[0] or bbox[3] > img_shape[0]-1 - margin[0]:
                 if height <= self.size_margin * img_shape[0]:
                     flag = True
-
+            if width <= 5 * self.size_margin * img_shape[1] and width <= 5 * height <= self.size_margin * img_shape[0]:
+                flag = True
 
             if self.invliad_bbox_cnt > self.invliad_bbox_cnt_max:
 
@@ -492,7 +493,6 @@ class Tracker():
                 else:
                     # reset
                     self.invliad_bbox_score_cnt = 0
-                    self.invliad_bbox_cnt = 0
 
             if self.invliad_bbox_score_cnt > self.invliad_bbox_score_cnt_max:
                 flag = True
