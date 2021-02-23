@@ -109,11 +109,17 @@ class VOTDataset(Dataset):
                 continue
 
             pbar.set_postfix_str(video)
+
+            if name == 'VOT2019':
+                img_names = [img.rsplit('/',1)[0] + '/color/' + img.rsplit('/',1)[1] for img in meta_data[video]['img_names']]
+            else:
+                img_names = meta_data[video]['img_names']
+
             self.videos[video] = VOTVideo(video,
                                           dataset_root,
                                           meta_data[video]['video_dir'],
                                           meta_data[video]['init_rect'],
-                                          meta_data[video]['img_names'],
+                                          img_names,
                                           meta_data[video]['gt_rect'],
                                           meta_data[video]['camera_motion'],
                                           meta_data[video]['illum_change'],

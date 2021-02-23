@@ -369,7 +369,6 @@ if __name__ == '__main__':
 
     device = torch.device('cuda')
 
-    assert args.transformer_mask # should be True
     model, criterion, postprocessors = build_model(args)
 
     checkpoint = torch.load(args.checkpoint, map_location='cpu')

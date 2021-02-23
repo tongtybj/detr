@@ -166,7 +166,7 @@ class Tracker(object):
 
             # visualize debug
             self.prev_rect_template_image = prev_template_image.copy()
-            init_bbox = np.array(self.size) * scale_z
+            init_bbox = np.array(self.size) * scale_z.item()
             exemplar_size = get_exemplar_size()
             x1 = np.round(exemplar_size/2 - init_bbox[0]/2).astype(np.uint8)
             y1 = np.round(exemplar_size/2 - init_bbox[1]/2).astype(np.uint8)
@@ -201,7 +201,7 @@ class Tracker(object):
             def change(r):
                 return torch.max(r, 1. / r)
 
-            bbox_wh_map = outputs['pred_bbox_wh'][0].cpu() * torch.as_tensor(search.shape[-2:])  # convert from relative [0, 1] to absolute [0, height] coordinates
+            bbox_wh_map = outputs['pred_bbox_wh'][0].cpu() * torch.as_tensor([255] * 2)  # convert from relative [0, 1] to absolute [0, height] coordinates
 
             # scale penalty
             pad = (bbox_wh_map[:, 0] + bbox_wh_map[:, 1]) * get_context_amount()
