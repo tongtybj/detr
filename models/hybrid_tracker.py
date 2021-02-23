@@ -404,7 +404,9 @@ class Tracker():
         def change(r):
             return torch.max(r, 1. / r)
 
-        bbox_wh_map = trtr_outputs['pred_bbox_wh'][0].cpu() * self.search_size # convert from relative [0, 1] to absolute [0, height] coordinates
+
+        # TODO: 255 is a fixed value because of the training process (template: 127, search: 255)
+        bbox_wh_map = trtr_outputs['pred_bbox_wh'][0].cpu() * 255 # convert from relative [0, 1] to absolute [0, height] coordinates
 
         # scale penalty
         pad = (bbox_wh_map[:, 0] + bbox_wh_map[:, 1]) * get_context_amount()
