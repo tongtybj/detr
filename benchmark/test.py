@@ -98,6 +98,8 @@ def get_args_parser():
                         help='the factor of the lpf for size tracking')
     parser.add_argument('--dcf_rate', default=0.5, type=float,
                         help='the weight for integrate dcf and trtr for heatmap ')
+    parser.add_argument('--boundary_recovery', action='store_true',
+                        help='whether use boundary recovery')
 
     parser.add_argument('--dataset_path', default="", type=str, help='path of datasets')
     parser.add_argument('--dataset', type=str, help='the benchmark', default="VOT2018")

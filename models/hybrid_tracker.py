@@ -31,7 +31,7 @@ from pytracking.tracker.atom.optim import ConvProblem, FactorizedConvProblem
 
 class Tracker():
 
-    def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf, dcf_layers, dcf_rate):
+    def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf, dcf_layers, dcf_rate, boundary_recovery):
 
         dcf_param_module = importlib.import_module('pytracking.parameter.atom.default_vot')
         self.dcf_params = dcf_param_module.parameters()
@@ -65,6 +65,15 @@ class Tracker():
         self.dcf_params.train_skipping = 10 # TODO: tuning 10 - 20 (vot-toolkit)
 
         self.dcf_layers = dcf_layers
+
+        self.invliad_bbox_cnt = 0
+        self.invliad_bbox_score_cnt = 0
+        self.invliad_bbox_cnt_max = 5 # parameter
+        self.invliad_bbox_score_cnt_max = 1 # parameter
+        self.boundary_margin = 0.01 # parameter: pixel? (300 -> 3)
+        self.size_margin = 0.02 # parameter: pixel? (300 -> 6)
+        self.invliad_bbox_score_thresh = 0.1 # parameter
+        self.boundary_recovery = boundary_recovery
 
     def init(self, image, bbox):
 
@@ -105,15 +114,6 @@ class Tracker():
         self.init_channel_avg = channel_avg
         self.init_sacle_z = scale_z
         self.init_target_sz = self.target_sz
-
-        self.invliad_bbox_cnt = 0
-        self.invliad_bbox_score_cnt = 0
-        self.invliad_bbox_cnt_max = 5 # parameter
-        self.invliad_bbox_score_cnt_max = 1 # parameter
-        self.boundary_margin = 0.01 # parameter: pixel? (300 -> 3)
-        self.size_margin = 0.02 # parameter: pixel? (300 -> 6)
-        self.invliad_bbox_score_thresh = 0.1 # parameter
-
 
     def dcf_init(self, image, channel_avg, scale_z):
 
@@ -472,7 +472,7 @@ class Tracker():
 
         #print(width, height, torch.max(heatmap))
         margin = np.array(img_shape) * self.boundary_margin
-        if bbox[0] <= margin[1] or bbox[1] < margin[0] or bbox[2] > img_shape[1]-1 - margin[1] or bbox[3] > img_shape[0]-1 - margin[0]:
+        if (bbox[0] <= margin[1] or bbox[1] < margin[0] or bbox[2] > img_shape[1]-1 - margin[1] or bbox[3] > img_shape[0]-1 - margin[0]) and self.boundary_recovery:
             self.invliad_bbox_cnt += 1
             #print("boundary!!! max_heatmap score from trtr: {}, count: {}, margin: {}, size: {}".format(torch.max(heatmap), self.invliad_bbox_cnt, margin, [width, height]))
 
@@ -906,4 +906,4 @@ def build_tracker(args):
     model.load_state_dict(checkpoint['model'])
     model.to(device)
 
-    return Tracker(model, postprocessors["bbox"], args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.dcf_layers, args.dcf_rate)
+    return Tracker(model, postprocessors["bbox"], args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.dcf_layers, args.dcf_rate, args.boundary_recovery)
