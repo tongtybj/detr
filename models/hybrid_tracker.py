@@ -31,7 +31,7 @@ from pytracking.tracker.atom.optim import ConvProblem, FactorizedConvProblem
 
 class Tracker():
 
-    def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf, dcf_layers, dcf_rate, boundary_recovery):
+    def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf, dcf_layers, dcf_rate, boundary_recovery, hard_negative_recovery):
 
         dcf_param_module = importlib.import_module('pytracking.parameter.atom.default_vot')
         self.dcf_params = dcf_param_module.parameters()
@@ -63,6 +63,7 @@ class Tracker():
         # Get feature specific params
         self.dcf_fparams = TensorList(self.dcf_params.features.get_fparams('feature_params').list() * len(dcf_layers))
         self.dcf_params.train_skipping = 10 # TODO: tuning 10 - 20 (vot-toolkit)
+        #self.dcf_params.hard_negative_learning_rate = 0.075
 
         self.dcf_layers = dcf_layers
 
@@ -75,6 +76,8 @@ class Tracker():
         self.relax_size_margin = 0.1
         self.hard_size_margin = 0.01 # parameter: pixel? (300 -> 6)
         self.boundary_recovery = boundary_recovery
+
+        self.hard_negative_recovery = hard_negative_recovery
 
     def init(self, image, bbox):
 
@@ -296,11 +299,10 @@ class Tracker():
             dcf_heatmap = None
             raise ValueError("we should not get not_found result from online heatmap updating")
 
-        """
+
         # use the last result as template image
-        heatmap = outputs['pred_heatmap'][0].cpu()
-        print("max torch.max(heatmap): ", torch.max(heatmap))
-        if torch.max(heatmap) < self.score_threshold and dcf_heatmap is not None:
+
+        if flag == 'hard_negative' and self.hard_negative_recovery:
             template_image, _ = crop_image(self.prev_image, prev_bbox_xyxy, padding = self.prev_channel_avg)
 
             # get mask
@@ -324,8 +326,8 @@ class Tracker():
 
             all_features = outputs["all_features"]
             outputs = self.postprocess(outputs)
-            print("use last result as template image")
-        """
+            #print("use last result as template image")
+
 
         # Combine with TrTr tracking framework
         out = self.combine(image.shape[:2], prev_pos[[1,0]], prev_sz[[1,0]], scale_z, outputs, search_image, flag, dcf_heatmap)
@@ -423,13 +425,15 @@ class Tracker():
         post_heatmap = None
         best_score = 0
 
+        if dcf_flag == 'hard_negative' and self.hard_negative_recovery:
+            window_factor = 0
+
         for i in range(self.window_steps):
             # add distance penalty
             post_heatmap = penalty * heatmap * (1 -  window_factor) + self.window * window_factor
             best_idx = torch.argmax(post_heatmap)
             best_score = heatmap[best_idx].item()
 
-            #print("     trtr window step: ", i, "; window_factor: ", window_factor)
 
             if best_score > self.score_threshold:
                 break;
@@ -912,4 +916,4 @@ def build_tracker(args):
     model.load_state_dict(checkpoint['model'])
     model.to(device)
 
-    return Tracker(model, postprocessors["bbox"], args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.dcf_layers, args.dcf_rate, args.boundary_recovery)
+    return Tracker(model, postprocessors["bbox"], args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.dcf_layers, args.dcf_rate, args.boundary_recovery, args.hard_negative_recovery)

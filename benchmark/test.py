@@ -100,6 +100,8 @@ def get_args_parser():
                         help='the weight for integrate dcf and trtr for heatmap ')
     parser.add_argument('--boundary_recovery', action='store_true',
                         help='whether use boundary recovery')
+    parser.add_argument('--hard_negative_recovery', action='store_true',
+                        help='whether use hard negative recovery')
 
     parser.add_argument('--dataset_path', default="", type=str, help='path of datasets')
     parser.add_argument('--dataset', type=str, help='the benchmark', default="VOT2018")
