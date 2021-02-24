@@ -71,8 +71,9 @@ class Tracker():
         self.invliad_bbox_cnt_max = 5 # parameter
         self.invliad_bbox_score_cnt_max = 1 # parameter
         self.boundary_margin = 0.01 # parameter: pixel? (300 -> 3)
-        self.size_margin = 0.02 # parameter: pixel? (300 -> 6)
         self.invliad_bbox_score_thresh = 0.1 # parameter
+        self.relax_size_margin = 0.1
+        self.hard_size_margin = 0.01 # parameter: pixel? (300 -> 6)
         self.boundary_recovery = boundary_recovery
 
     def init(self, image, bbox):
@@ -472,21 +473,26 @@ class Tracker():
 
         #print(width, height, torch.max(heatmap))
         margin = np.array(img_shape) * self.boundary_margin
-        if (bbox[0] <= margin[1] or bbox[1] < margin[0] or bbox[2] > img_shape[1]-1 - margin[1] or bbox[3] > img_shape[0]-1 - margin[0]) and self.boundary_recovery:
-            self.invliad_bbox_cnt += 1
+        if bbox[0] <= margin[1] or bbox[1] < margin[0] or bbox[2] > img_shape[1]-1 - margin[1] or bbox[3] > img_shape[0]-1 - margin[0]:
+            if self.boundary_recovery:
+                self.invliad_bbox_cnt += 1
             #print("boundary!!! max_heatmap score from trtr: {}, count: {}, margin: {}, size: {}".format(torch.max(heatmap), self.invliad_bbox_cnt, margin, [width, height]))
 
             flag = False
 
             # too small bbox
-            if bbox[0] <= margin[1] or bbox[2] > img_shape[1]-1 - margin[1]:
-                if width <= self.size_margin * img_shape[1]:
+            if self.boundary_recovery:
+                if bbox[0] <= margin[1] or bbox[2] > img_shape[1]-1 - margin[1]:
+                    if width <= self.hard_size_margin * img_shape[1]:
+                        flag = True
+                if bbox[1] <= margin[0] or bbox[3] > img_shape[0]-1 - margin[0]:
+                    if height <= self.hard_size_margin * img_shape[0]:
+                        flag = True
+                if width <= self.relax_size_margin * img_shape[1] and height <= self.relax_size_margin * img_shape[0]:
                     flag = True
-            if bbox[1] <= margin[0] or bbox[3] > img_shape[0]-1 - margin[0]:
-                if height <= self.size_margin * img_shape[0]:
+            else:
+                if width <= self.hard_size_margin * img_shape[1] and height <= self.hard_size_margin * img_shape[0]:
                     flag = True
-            if width <= 5 * self.size_margin * img_shape[1] and width <= 5 * height <= self.size_margin * img_shape[0]:
-                flag = True
 
             if self.invliad_bbox_cnt > self.invliad_bbox_cnt_max:
 
