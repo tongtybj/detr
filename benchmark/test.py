@@ -99,6 +99,8 @@ def get_args_parser():
                         help='the factor of the lpf for size tracking')
     parser.add_argument('--dcf_rate', default=0.5, type=float,
                         help='the weight for integrate dcf and trtr for heatmap ')
+    parser.add_argument('--dcf_size', default=0, type=int,
+                        help='the size for feature for dcf')
     parser.add_argument('--boundary_recovery', action='store_true',
                         help='whether use boundary recovery')
     parser.add_argument('--hard_negative_recovery', action='store_true',

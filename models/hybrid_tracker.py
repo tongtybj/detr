@@ -31,7 +31,7 @@ from pytracking.tracker.atom.optim import ConvProblem, FactorizedConvProblem
 
 class Tracker():
 
-    def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf, dcf_layers, dcf_rate, boundary_recovery, hard_negative_recovery):
+    def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf, dcf_size, dcf_layers, dcf_rate, boundary_recovery, hard_negative_recovery):
 
         dcf_param_module = importlib.import_module('pytracking.parameter.atom.default_vot')
         self.dcf_params = dcf_param_module.parameters()
@@ -64,6 +64,7 @@ class Tracker():
         self.dcf_fparams = TensorList(self.dcf_params.features.get_fparams('feature_params').list() * len(dcf_layers))
         self.dcf_params.train_skipping = 10 # TODO: tuning 10 - 20 (vot-toolkit)
         #self.dcf_params.hard_negative_learning_rate = 0.075
+        self.dcf_feature_sz = dcf_size
 
         self.dcf_layers = dcf_layers
 
@@ -141,14 +142,15 @@ class Tracker():
 
         # Set sizes
         self.dcf_img_support_sz = self.dcf_img_sample_sz
-        self.dcf_feature_sz = self.heatmap_size
-        if self.model.backbone.dilation:
-            self.dcf_feature_sz = self.dcf_feature_sz / 2
-        self.dcf_feature_sz = TensorList([torch.as_tensor([self.dcf_feature_sz, self.dcf_feature_sz])] * len(self.dcf_layers))
+        if self.dcf_feature_sz == 0:
+            self.dcf_feature_sz = self.heatmap_size
+            if self.model.backbone.dilation:
+                self.dcf_feature_sz = self.dcf_feature_sz // 2
+        self.dcf_feature_sz_list = TensorList([torch.as_tensor([self.dcf_feature_sz, self.dcf_feature_sz])] * len(self.dcf_layers))
         self.dcf_output_sz = self.dcf_img_support_sz # use fourier to get same size with img_support_sz
         self.dcf_kernel_size = self.dcf_fparams.attribute('kernel_size')[0]
         self.dcf_compressed_dim = self.dcf_fparams.attribute('compressed_dim', None)[0]
-        #print(self.dcf_img_support_sz, self.dcf_feature_sz, self.dcf_output_sz, self.dcf_kernel_size, self.dcf_compressed_dim)
+        #print(self.dcf_img_support_sz, self.dcf_feature_sz_list, self.dcf_output_sz, self.dcf_kernel_size, self.dcf_compressed_dim)
 
         # Optimization options
         self.dcf_output_window = dcf.hann2d(self.dcf_output_sz.long(), centered=False).to(self.dcf_params.device)
@@ -298,7 +300,6 @@ class Tracker():
 
         # Compute scores
         scores_raw = self.dcf_apply_filter(test_x)
-
         translation_vec, s, flag = self.dcf_localize_target(scores_raw)
         dcf_heatmap = torch.clamp(s[0], min = 0)
         dcf_max_score = torch.max(dcf_heatmap).item()
@@ -402,7 +403,6 @@ class Tracker():
             trtr_dcf_scale = 1.0
             resized_bbox = torch.cat([(1 - trtr_dcf_scale) * self.dcf_img_sample_sz / 2, (1 + trtr_dcf_scale) * self.dcf_img_sample_sz / 2])
             resized_dcf_heatmap =  crop_hwc(dcf_heatmap.permute(1,2,0).detach().cpu().numpy(), resized_bbox, self.heatmap_size)
-            #print(resized_bbox, resized_dcf_heatmap.shape)
             unroll_resized_dcf_heatmap = torch.tensor(resized_dcf_heatmap).view(self.heatmap_size * self.heatmap_size) / len(self.dcf_layers)
             best_idx = torch.argmax(unroll_resized_dcf_heatmap)
             #print("the peak in dcf hetmap: {}".format([best_idx % self.heatmap_size, best_idx // self.heatmap_size]))
@@ -597,7 +597,7 @@ class Tracker():
         sf_weighted = fourier.cfft2(scores_raw) / (scores_raw.size(2) * scores_raw.size(3))
         #print("scores_raw", type(scores_raw), len(scores_raw), scores_raw[0].shape)
 
-        for i, sz in enumerate(self.dcf_feature_sz):
+        for i, sz in enumerate(self.dcf_feature_sz_list):
             sf_weighted[i] = fourier.shift_fs(sf_weighted[i], math.pi * (1 - torch.Tensor([self.dcf_kernel_size[0]%2, self.dcf_kernel_size[1]%2]) / sz))
 
         scores_fs = fourier.sum_fs(sf_weighted)
@@ -770,13 +770,13 @@ class Tracker():
 
         # Output sigma factor
         output_sigma_factor = self.dcf_fparams.attribute('output_sigma_factor')
-        self.dcf_sigma = (self.dcf_feature_sz / self.dcf_img_support_sz * self.dcf_base_target_sz).prod().sqrt() * output_sigma_factor * torch.ones(2)
+        self.dcf_sigma = (self.dcf_feature_sz_list / self.dcf_img_support_sz * self.dcf_base_target_sz).prod().sqrt() * output_sigma_factor * torch.ones(2)
 
         # Center pos in normalized coords (offset becuase of the float)
         target_center_norm = (self.target_pos - self.target_pos.round()) / (self.dcf_target_scale * self.dcf_img_support_sz)
 
         # Generate label functions
-        for y, sig, sz, x in zip(self.dcf_y, self.dcf_sigma, self.dcf_feature_sz, train_x):
+        for y, sig, sz, x in zip(self.dcf_y, self.dcf_sigma, self.dcf_feature_sz_list, train_x):
             center_pos = sz * target_center_norm + 0.5 * torch.Tensor([(self.dcf_kernel_size[0] + 1) % 2, (self.dcf_kernel_size[1] + 1) % 2])
             for i, T in enumerate(self.dcf_transforms[:x.shape[0]]):
                 sample_center = center_pos + torch.Tensor(T.shift) / self.dcf_img_support_sz * sz
@@ -856,7 +856,7 @@ class Tracker():
         # Generate label function
         train_y = TensorList()
         target_center_norm = (self.target_pos - sample_pos) / (sample_scale * self.dcf_img_support_sz)
-        for sig, sz in zip(self.dcf_sigma, self.dcf_feature_sz):
+        for sig, sz in zip(self.dcf_sigma, self.dcf_feature_sz_list):
             center = sz * target_center_norm + 0.5 * torch.Tensor([(self.dcf_kernel_size[0] + 1) % 2, (self.dcf_kernel_size[1] + 1) % 2])
             train_y.append(dcf.label_function_spatial(sz, sig, center))
         return train_y
@@ -905,8 +905,7 @@ class Tracker():
             feature = features[layer[-1]]
 
             if self.model.backbone.dilation:  # i.e., Resnet50
-                #feature = F.adaptive_avg_pool2d(self.model.input_projs['0'](feature), feature.shape[-1]//2)
-                feature = F.adaptive_avg_pool2d(feature, feature.shape[-1]//2)
+                feature = F.adaptive_avg_pool2d(feature, self.dcf_feature_sz)
 
             # Normalize
             normalize_power = 2 # heuristic
@@ -931,4 +930,4 @@ def build_tracker(args):
     model.load_state_dict(checkpoint['model'])
     model.to(device)
 
-    return Tracker(model, postprocessors["bbox"], args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.dcf_layers, args.dcf_rate, args.boundary_recovery, args.hard_negative_recovery)
+    return Tracker(model, postprocessors["bbox"], args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.dcf_size, args.dcf_layers, args.dcf_rate, args.boundary_recovery, args.hard_negative_recovery)
