@@ -114,10 +114,15 @@ class Tracker():
 
         self.dcf_init(image, channel_avg, scale_z)
 
-        self.init_image = image
-        self.init_channel_avg = channel_avg
-        self.init_sacle_z = scale_z
         self.init_target_sz = self.target_sz
+
+        # for visualize
+        debug_bbox = torch.round(box_cxcywh_to_xyxy(torch.cat([torch.tensor([63.5, 63.5]), self.target_sz * scale_z]))).int()
+        debug_image = cv2.rectangle(template_image,
+                                         (debug_bbox[0], debug_bbox[1]),
+                                         (debug_bbox[2], debug_bbox[3]),(0,255,0),3)
+
+        return {'template_image': debug_image}
 
     def dcf_init(self, image, channel_avg, scale_z):
 
@@ -301,7 +306,6 @@ class Tracker():
 
 
         # use the last result as template image
-
         if flag == 'hard_negative' and self.hard_negative_recovery:
             template_image, _ = crop_image(self.prev_image, prev_bbox_xyxy, padding = self.prev_channel_avg)
 

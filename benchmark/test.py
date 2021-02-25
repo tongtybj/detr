@@ -10,6 +10,7 @@ import os
 
 import sys
 import cv2
+import copy
 import torch
 import numpy as np
 from glob import glob
@@ -150,6 +151,7 @@ def main(args, tracker):
                 search_image = None
                 raw_heatmap = None
                 post_heatmap = None
+                prev_search_image = None
 
                 for idx, (img, gt_bbox) in enumerate(video):
                     if len(gt_bbox) == 4:
@@ -182,6 +184,10 @@ def main(args, tracker):
                             lost_number += 1
 
                             if args.vis and args.debug_vis:
+
+
+                                cv2.imshow('prev_search_image', prev_search_image)
+
                                 cv2.polylines(img, [np.array(gt_bbox, np.int).reshape((-1, 2))], True, (0, 255, 0), 3)
 
                                 bbox = list(map(int, pred_bbox))
@@ -218,10 +224,17 @@ def main(args, tracker):
 
                         if args.debug_vis:
 
+                            if prev_search_image is not None:
+                                cv2.imshow('prev_search_image', prev_search_image)
+
                             for key, value in outputs.items():
                                 if isinstance(value, np.ndarray):
                                     if len(value.shape) == 3 or len(value.shape) == 2:
                                         cv2.imshow(key, value)
+
+                                        if key == 'search_image':
+                                            prev_search_image = value
+
                             k = cv2.waitKey(0)
                             if k == 27:         # wait for ESC key to exit
                                 sys.exit()
@@ -266,6 +279,7 @@ def main(args, tracker):
                 track_times = []
                 template_image = None
                 search_image = None
+                prev_search_image = None
                 raw_heatmap = None
                 post_heatmap = None
                 lost_number = 0
@@ -273,7 +287,7 @@ def main(args, tracker):
                 for idx, (img, gt_bbox) in enumerate(video):
                     tic = cv2.getTickCount()
                     if idx == 0:
-                        tracker.init(img, gt_bbox)
+                        outputs = tracker.init(img, gt_bbox)
                         pred_bbox = gt_bbox
                         scores.append(None)
                         pred_bboxes.append(pred_bbox)
@@ -291,6 +305,11 @@ def main(args, tracker):
                     if idx == 0:
                         if args.vis:
                             cv2.destroyAllWindows()
+                            if args.debug_vis:
+                                for key, value in outputs.items():
+                                    if isinstance(value, np.ndarray):
+                                        if len(value.shape) == 3 or len(value.shape) == 2:
+                                            cv2.imshow(key, value)
                     else:
                         if not gt_bbox == [0,0,0,0] and not np.isnan(np.array(gt_bbox)).any():
                             if pred_bbox[0] + pred_bbox[2] < gt_bbox[0] or pred_bbox[0] > gt_bbox[0] + gt_bbox[2] or pred_bbox[1] + pred_bbox[3] < gt_bbox[1] or pred_bbox[1] > gt_bbox[1] + gt_bbox[3]:
@@ -309,10 +328,17 @@ def main(args, tracker):
                             cv2.imshow(video.name, img)
 
                             if args.debug_vis:
+
+                                if prev_search_image is not None:
+                                    cv2.imshow('prev_search_image', prev_search_image)
+
                                 for key, value in outputs.items():
                                     if isinstance(value, np.ndarray):
                                         if len(value.shape) == 3 or len(value.shape) == 2:
                                             cv2.imshow(key, value)
+
+                                            if key == 'search_image':
+                                                prev_search_image = value
 
                                 k = cv2.waitKey(0)
                                 if k == 27:         # wait for ESC key to exit
