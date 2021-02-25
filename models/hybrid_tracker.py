@@ -73,9 +73,10 @@ class Tracker():
         self.invliad_bbox_score_cnt_max = 1 # parameter
         self.boundary_margin = 0.01 # parameter: pixel? (300 -> 3)
         self.invliad_bbox_score_thresh = 0.1 # parameter
-        self.relax_size_margin = 0.1
+        self.relax_size_margin = 0.05
         self.hard_size_margin = 0.01 # parameter: pixel? (300 -> 6)
         self.boundary_recovery = boundary_recovery
+        self.boundary_flag = False
 
         self.hard_negative_recovery = hard_negative_recovery
 
@@ -95,6 +96,7 @@ class Tracker():
         # get crop
         s_z, scale_z = siamfc_like_scale(bbox_xyxy)
         s_x = self.search_size / scale_z
+        #print(s_z, s_x, scale_z, image.shape, bbox)
         template_image, _ = crop_image(image, bbox_xyxy, padding = channel_avg)
 
         # get mask
@@ -115,9 +117,10 @@ class Tracker():
         self.dcf_init(image, channel_avg, scale_z)
 
         self.init_target_sz = self.target_sz
+        self.init_s_x = s_x
 
         # for visualize
-        debug_bbox = torch.round(box_cxcywh_to_xyxy(torch.cat([torch.tensor([63.5, 63.5]), self.target_sz * scale_z]))).int()
+        debug_bbox = torch.round(box_cxcywh_to_xyxy(torch.cat([torch.tensor([63.5, 63.5]),  torch.Tensor([bbox[2], bbox[3]]) * scale_z]))).int()
         debug_image = cv2.rectangle(template_image,
                                          (debug_bbox[0], debug_bbox[1]),
                                          (debug_bbox[2], debug_bbox[3]),(0,255,0),3)
@@ -243,13 +246,22 @@ class Tracker():
         prev_pos = self.target_pos
         prev_sz = self.target_sz
         channel_avg = np.mean(image, axis=(0, 1))
+
         prev_bbox_xyxy = [prev_pos[1] - prev_sz[1] / 2,
                           prev_pos[0] - prev_sz[0] / 2,
                           prev_pos[1] + prev_sz[1] / 2,
                           prev_pos[0] + prev_sz[0] / 2]
-        _, search_image = crop_image(image, prev_bbox_xyxy, padding = channel_avg, instance_size = self.search_size)
         s_z, scale_z = siamfc_like_scale(prev_bbox_xyxy)
         s_x = self.search_size / scale_z
+
+        if self.boundary_flag:
+            # use
+            s_x = np.max([np.min([np.max(image.shape[:2]) / 2, np.min(image.shape[:2])]), self.init_s_x])
+            scale_z = self.search_size / s_x
+            bbox = [prev_pos[1] - s_x / 2, prev_pos[0] - s_x / 2, prev_pos[1] + s_x / 2, prev_pos[0] + s_x / 2]
+            search_image = crop_hwc(image, bbox, self.search_size, channel_avg)
+        else:
+            _, search_image = crop_image(image, prev_bbox_xyxy, padding = channel_avg, instance_size = self.search_size)
 
         # get mask
         search_mask = [0, 0, search_image.shape[1], search_image.shape[0]]
@@ -306,7 +318,7 @@ class Tracker():
 
 
         # use the last result as template image
-        if flag == 'hard_negative' and self.hard_negative_recovery:
+        if flag == 'hard_negative' and self.hard_negative_recovery and not self.boundary_flag:
             template_image, _ = crop_image(self.prev_image, prev_bbox_xyxy, padding = self.prev_channel_avg)
 
             # get mask
@@ -447,7 +459,7 @@ class Tracker():
             if window_factor == 0:
                 post_heatmap = penalty * heatmap
 
-        #print("trtr best score: ", best_score, "; dcf flag: ", dcf_flag)
+        #print("trtr best score: ", best_score, "; dcf best score: ", torch.max(unroll_resized_dcf_heatmap))
 
         if dcf_heatmap is not None:
             post_heatmap = post_heatmap * (1 -  self.dcf_rate) + unroll_resized_dcf_heatmap * self.dcf_rate
@@ -468,39 +480,38 @@ class Tracker():
         cy = prev_pos[1] + ct_delta[1].item()
 
         # smooth bbox
-        lpf = best_score * self.size_lpf
-        bbox_wh = bbox_wh / scale_z
+        lpf = min(best_score * self.size_lpf, 1)
+        if self.boundary_flag:
+            lpf = 0.5 # heuristic
 
+        bbox_wh = bbox_wh / scale_z
         width = prev_sz[0] * (1 - lpf) + bbox_wh[0].item() * lpf
         height = prev_sz[1] * (1 - lpf) + bbox_wh[1].item() * lpf
-
 
         # clip boundary
         bbox = [cx - width / 2, cy - height / 2,
                 cx + width / 2, cy + height / 2]
 
-        #print(width, height, torch.max(heatmap))
+        self.boundary_flag = False
         margin = np.array(img_shape) * self.boundary_margin
         if bbox[0] <= margin[1] or bbox[1] < margin[0] or bbox[2] > img_shape[1]-1 - margin[1] or bbox[3] > img_shape[0]-1 - margin[0]:
             if self.boundary_recovery:
                 self.invliad_bbox_cnt += 1
             #print("boundary!!! max_heatmap score from trtr: {}, count: {}, margin: {}, size: {}".format(torch.max(heatmap), self.invliad_bbox_cnt, margin, [width, height]))
 
-            flag = False
-
             # too small bbox
             if self.boundary_recovery:
                 if bbox[0] <= margin[1] or bbox[2] > img_shape[1]-1 - margin[1]:
                     if width <= self.hard_size_margin * img_shape[1]:
-                        flag = True
+                        self.boundary_flag = True
                 if bbox[1] <= margin[0] or bbox[3] > img_shape[0]-1 - margin[0]:
                     if height <= self.hard_size_margin * img_shape[0]:
-                        flag = True
+                        self.boundary_flag = True
                 if width <= self.relax_size_margin * img_shape[1] and height <= self.relax_size_margin * img_shape[0]:
-                    flag = True
+                    self.boundary_flag = True
             else:
                 if width <= self.hard_size_margin * img_shape[1] and height <= self.hard_size_margin * img_shape[0]:
-                    flag = True
+                    self.boundary_flag = True
 
             if self.invliad_bbox_cnt > self.invliad_bbox_cnt_max:
 
@@ -511,9 +522,9 @@ class Tracker():
                     self.invliad_bbox_score_cnt = 0
 
             if self.invliad_bbox_score_cnt > self.invliad_bbox_score_cnt_max:
-                flag = True
+                self.boundary_flag = True
 
-            if flag:
+            if self.boundary_flag:
                 # TODO: use larget search area for re-tracking
 
                 # reset the dcf optimizer
