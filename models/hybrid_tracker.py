@@ -391,7 +391,7 @@ class Tracker():
             resized_bbox = torch.cat([(1 - trtr_dcf_scale) * self.dcf_img_sample_sz / 2, (1 + trtr_dcf_scale) * self.dcf_img_sample_sz / 2])
             resized_dcf_heatmap =  crop_hwc(dcf_heatmap.permute(1,2,0).detach().cpu().numpy(), resized_bbox, self.heatmap_size)
             #print(resized_bbox, resized_dcf_heatmap.shape)
-            unroll_resized_dcf_heatmap = torch.tensor(resized_dcf_heatmap).view(self.heatmap_size * self.heatmap_size)
+            unroll_resized_dcf_heatmap = torch.tensor(resized_dcf_heatmap).view(self.heatmap_size * self.heatmap_size) / len(self.dcf_layers)
             best_idx = torch.argmax(unroll_resized_dcf_heatmap)
             #print("the peak in dcf hetmap: {}".format([best_idx % self.heatmap_size, best_idx // self.heatmap_size]))
         else:
