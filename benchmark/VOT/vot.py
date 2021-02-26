@@ -13,7 +13,9 @@ if env_path not in sys.path:
 
 from benchmark.test import get_args_parser
 from models import build_model
-from models.hybrid_tracker import build_tracker
+
+from models.tracker import build_tracker as build_baseline_tracker
+from models.hybrid_tracker import build_tracker as build_online_tracker
 
 try:
     import trax
@@ -60,20 +62,40 @@ def convert_vot_anno_to_rect(vot_anno, type):
         raise ValueError
 
 
-def run_vot(checkpoint, return_layers = ['layer3'], dcf_layers = ['layer3'], enc_layers = 1, dec_layers = 1, vot2020 = False):
+def run_vot(checkpoint, baseline_tracker = False, return_layers = ['layer3'], dcf_layers = ['layer3'], enc_layers = None, dec_layers = None, search_size = None, tracking_size_lpf = None, window_factor = None, dcf_rate = None, dcf_size = None, hard_negative_recovery = None, vot2020 = False):
 
     parser = argparse.ArgumentParser('TRTR model', parents=[get_args_parser()])
     args = parser.parse_args()
     args.checkpoint = checkpoint
 
-    # hard-coding
     args.return_layers = return_layers
     args.dcf_layers = dcf_layers
-    args.enc_layers = enc_layers
-    args.dec_layers = dec_layers
+    if enc_layers is not None:
+        args.enc_layers = enc_layers
+    if dec_layers is not None:
+        args.dec_layers = dec_layers
+
+    # TrTr
+    if search_size is not None:
+        args.search_size = search_size
+    if tracking_size_lpf is not None:
+        args.tracking_size_lpf = tracking_size_lpf
+    if window_factor is not None:
+        args.window_factor = window_factor
+
+    # DCF 
+    if dcf_rate is not None:
+        args.dcf_rate = dcf_rate
+    if dcf_size is not None:
+        args.dcf_size = dcf_size
+    if hard_negative_recovery is not None:
+        args.hard_negative_recovery = hard_negative_recovery        
 
     # create tracker
-    tracker = build_tracker(args)
+    if baseline_tracker:
+        tracker = build_baseline_tracker(args)
+    else:
+        tracker = build_online_tracker(args)
 
 
     def _convert_anno_to_list(vot_anno):
