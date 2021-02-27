@@ -75,6 +75,9 @@ class UAVDataset(Dataset):
             img_names = img_names[1:]
             gt_rects = gt_rects[1:]
 
+            if  video in ['car17', 'person23']: # first annotation is not good
+                gt_rects[0] = gt_rects[1]
+
             absent = [1 if np.isnan(np.array(rect)).any() else 0 for rect in gt_rects]
 
             pbar.set_postfix_str(video)
