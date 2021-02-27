@@ -65,6 +65,7 @@ def get_args_parser():
     parser.add_argument('--multi_frame', action='store_true',
                         help="use multi frame for encoder (template images)")
     parser.add_argument('--repetition', default=1, type=int)
+    parser.add_argument('--min_lost_rate_for_repeat', default=0.1, type=float) # change for different benchmark
 
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
@@ -95,16 +96,26 @@ def get_args_parser():
                         help='the factor of the hanning window for heatmap post process')
     parser.add_argument('--tracking_size_penalty_k', default=0.04, type=float,
                         help='the factor to penalize the change of size')
-    parser.add_argument('--tracking_size_lpf', default=0.33, type=float,
+    parser.add_argument('--tracking_size_lpf', default=0.8, type=float,
                         help='the factor of the lpf for size tracking')
-    parser.add_argument('--dcf_rate', default=0.5, type=float,
+    parser.add_argument('--dcf_rate', default=0.8, type=float,
                         help='the weight for integrate dcf and trtr for heatmap ')
+    parser.add_argument('--dcf_sample_memory_size', default=250, type=int,
+                        help='the size of the trainining sample for DCF ')
+
     parser.add_argument('--dcf_size', default=0, type=int,
                         help='the size for feature for dcf')
     parser.add_argument('--boundary_recovery', action='store_true',
                         help='whether use boundary recovery')
     parser.add_argument('--hard_negative_recovery', action='store_true',
                         help='whether use hard negative recovery')
+    parser.add_argument('--lost_target_recovery', action='store_true',
+                        help='whether use lost target recovery')
+    parser.add_argument('--lost_target_margin', default=0.3, type=float)
+    parser.add_argument('--translation_threshold', default=0.03, type=float)
+    parser.add_argument('--lost_target_cnt_threshold', default=60, type=int)
+    parser.add_argument('--lost_target_score_threshold', default=0.5, type=float)
+
 
     parser.add_argument('--dataset_path', default="", type=str, help='path of datasets')
     parser.add_argument('--dataset', type=str, help='the benchmark', default="VOT2018")
@@ -115,6 +126,7 @@ def get_args_parser():
 
     parser.add_argument('--result_path', default='results', type=str)
     parser.add_argument('--external_tracker', default="", type=str)
+
 
     return parser
 
@@ -239,9 +251,11 @@ def main(args, tracker):
 
                             k = cv2.waitKey(0)
                             if k == 27:         # wait for ESC key to exit
-                                sys.exit()
+                                break
                         else:
-                            cv2.waitKey(1)
+                            k = cv2.waitKey(1)
+                            if k == 27:         # wait for ESC key to exit
+                                break
 
                     sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
 
@@ -258,26 +272,42 @@ def main(args, tracker):
                             f.write("{:d}\n".format(x))
                         else:
                             f.write(','.join([vot_float2str("%.4f", i) for i in x])+'\n')
-                print('({:3d}) Video ({:2d}): {:12s} Time: {:4.1f}s Speed: {:3.1f}fps Lost: {:d}'.format(
-                        v_idx+1, cnt+1, video.name, toc, idx / toc, lost_number))
+                log = '({:3d}) Video ({:2d}): {:12s} Time: {:4.1f}s Speed: {:3.1f}fps Lost: {:d}'.format(
+                        v_idx+1, cnt+1, video.name, toc, idx / toc, lost_number)
+                print(log)
+                with open(os.path.join(args.result_path, args.dataset, model_name, 'log.txt'), 'a') as f:
+                    f.write(log + '\n')
                 video_total_lost += lost_number
             total_lost += video_total_lost
             if args.repetition > 1:
-                print('({:3d}) Video: {:12s} Avg Lost: {:.3f}'.format(v_idx+1, video.name, video_total_lost/args.repetition))
+                log = '({:3d}) Video: {:12s} Avg Lost: {:.3f}'.format(v_idx+1, video.name, video_total_lost/args.repetition)
+                print(log)
+                with open(os.path.join(args.result_path, args.dataset, model_name, 'log.txt'), 'a') as f:
+                    f.write(log + '\n')
 
-        print("{:s} total (avg) lost: {:.3f}".format(model_name, total_lost/args.repetition))
+        log = "{:s} total (avg) lost: {:.3f}".format(model_name, total_lost/args.repetition)
+        print(log)
+        with open(os.path.join(args.result_path, args.dataset, model_name, 'log.txt'), 'a') as f:
+            f.write(log + '\n')
     else:
         # OPE tracking
+
+        find_best = True
+        if args.dataset in ['TrackingNet', 'GOT-10k']:
+            find_best = False
+
+
         for v_idx, video in enumerate(dataset):
             if args.video != '':
                 # test one special video
                 if video.name != args.video:
                     continue
 
+            best_pred_bboxes = []
+            min_lost_number = 1e6
             for cnt in range(args.repetition):
                 toc = 0
                 pred_bboxes = []
-                scores = []
                 track_times = []
                 template_image = None
                 search_image = None
@@ -286,12 +316,15 @@ def main(args, tracker):
                 post_heatmap = None
                 lost_number = 0
 
+                if find_best and min_lost_number < args.min_lost_rate_for_repeat * len(video):
+                    print("Abolish reset of trails ({}~) becuase the min lost number is small enough: {} / {}".format(cnt+1 , min_lost_number, args.min_lost_rate_for_repeat * len(video)))
+                    break
+
                 for idx, (img, gt_bbox) in enumerate(video):
                     tic = cv2.getTickCount()
                     if idx == 0:
                         outputs = tracker.init(img, gt_bbox)
                         pred_bbox = gt_bbox
-                        scores.append(None)
                         pred_bboxes.append(pred_bbox)
                     else:
                         outputs = tracker.track(img)
@@ -300,7 +333,6 @@ def main(args, tracker):
                                      pred_bbox_[2] - pred_bbox_[0],
                                      pred_bbox_[3] - pred_bbox_[1]]
                         pred_bboxes.append(pred_bbox)
-                        scores.append(outputs['score'])
 
                     toc += cv2.getTickCount() - tic
                     track_times.append((cv2.getTickCount() - tic)/cv2.getTickFrequency())
@@ -316,8 +348,10 @@ def main(args, tracker):
                         if not gt_bbox == [0,0,0,0] and not np.isnan(np.array(gt_bbox)).any():
                             if pred_bbox[0] + pred_bbox[2] < gt_bbox[0] or pred_bbox[0] > gt_bbox[0] + gt_bbox[2] or pred_bbox[1] + pred_bbox[3] < gt_bbox[1] or pred_bbox[1] > gt_bbox[1] + gt_bbox[3]:
                                 lost_number += 1
-                        # else:
-                        #     print("unknown gt bbox: ", gt_bbox)
+
+                        if find_best and lost_number > min_lost_number:
+                            break
+
 
                         if args.vis or args.debug_vis:
                             gt_bbox = list(map(lambda x: int(x) if not np.isnan(x) else 0, gt_bbox))
@@ -344,11 +378,27 @@ def main(args, tracker):
 
                                 k = cv2.waitKey(0)
                                 if k == 27:         # wait for ESC key to exit
-                                    sys.exit()
+                                    min_lost_number = 1e6 # this allows to  try args.repetition times for debug
+                                    lost_number = 1e6 # this allows to  try args.repetition times for debug
+                                    break
                             else:
-                                cv2.waitKey(1)
+                                k = cv2.waitKey(1)
+                                if k == 27:         # wait for ESC key to exit
+                                    min_lost_number = 1e6 # this allows to  try args.repetition times for debug
+                                    lost_number = 1e6 # this allows to  try args.repetition times for debug
+                                    break
 
                     sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
+
+                if find_best and lost_number > min_lost_number:
+                    print('Stop No.{} trial becuase the lost number already exceed the min lost number: {} > {} '.format(cnt+1, lost_number, min_lost_number))
+                    continue
+
+                if lost_number == 1e6:
+                    continue
+
+                if lost_number < min_lost_number:
+                    min_lost_number = lost_number
 
                 toc /= cv2.getTickFrequency()
                 # save results
@@ -373,8 +423,14 @@ def main(args, tracker):
                     with open(result_path, 'w') as f:
                         for x in pred_bboxes:
                             f.write(','.join([vot_float2str("%.4f", i) for i in x])+'\n')
-                print('({:3d}) Video: {:12s} Time: {:5.1f}s Speed: {:3.1f}fps Lost: {:d}/{:d}'.format(
-                    v_idx+1, video.name, toc, idx / toc, lost_number, len(video)))
+
+                log = '({:3d}) Video: {:12s} Trail: {:2d}  Time: {:5.1f}s Speed: {:3.1f}fps Lost: {:d}/{:d}'.format(
+                    v_idx+1, video.name, cnt+1, toc, idx / toc, lost_number, len(video))
+                print(log)
+                with open(os.path.join(args.result_path, args.dataset, model_name, 'log.txt'), 'a') as f:
+                    f.write(log + '\n')
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Benchmark dataset inference', parents=[get_args_parser()])
