@@ -103,8 +103,14 @@ class Tracker(object):
 
         self.init_best_score = 0
 
-        # debug
-        return template_image
+        # for visualize
+        debug_bbox = torch.round(box_cxcywh_to_xyxy(torch.cat([torch.tensor([63.5, 63.5]),  torch.Tensor([bbox[2], bbox[3]]) * scale_z]))).int()
+        debug_image = cv2.rectangle(template_image,
+                                         (debug_bbox[0], debug_bbox[1]),
+                                         (debug_bbox[2], debug_bbox[3]),(0,255,0),3)
+
+        return {'template_image': debug_image}
+
 
     def track(self, img):
         """
