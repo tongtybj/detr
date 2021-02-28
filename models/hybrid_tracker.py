@@ -107,6 +107,10 @@ class Tracker():
         self.max_false_postive = 3
         self.valid_score_threshold = 0.25
 
+        # initial fast motion
+        self.max_translation = get_exemplar_size() / 2  # heuristic paramter to detect fast motion: half of exemplar_size (i.e., 127)
+        self.expand_search_size = 500 # max for backbone of resnet50
+
     def init(self, image, bbox):
 
         # Get position and size
@@ -115,6 +119,7 @@ class Tracker():
         # That is the reason why it has a slight worse performance than list operation whcih is  double64 type.
         # But right now it is OK
         self.target_pos = torch.Tensor([bbox[1] + bbox[3]/2, bbox[0] + bbox[2]/2]) # center
+        self.init_target_pos = self.target_pos
         self.target_sz = torch.Tensor([bbox[3], bbox[2]]) # real size in pixel
 
         # TrTr
@@ -143,7 +148,6 @@ class Tracker():
 
         self.init_target_sz = self.target_sz
         self.init_s_x = s_x
-
 
         # dcf initialize
         self.dcf_frame_num = 1
@@ -459,6 +463,27 @@ class Tracker():
                     self.boundary_flag = True # TODO: change to other name
 
 
+
+        # heuristic solution:
+        # if fst target motion is found in the first tracking frame, we expand the search size
+        if self.dcf_frame_num == 2:
+            bbox_ct = out['bbox_in_search_image']
+            delta = (bbox_ct - self.search_size / 2).abs().max().item()
+            if delta > self.max_translation:
+                print('fast target motion in the first frame : {}/{}'.format(delta, self.max_translation))
+                self.search_size = self.expand_search_size # heuristic
+                self.window_factor /= 2 # heuristic
+
+                # update baseline tracker configuration
+                stride = self.model.backbone.stride
+                self.heatmap_size = (self.search_size + stride - 1) // stride
+                hanning = np.hanning(self.heatmap_size)
+                self.window = torch.as_tensor(np.outer(hanning, hanning).flatten())
+
+                # re training DCF
+                # TODO: the projection matrix maybe not necessary. try to only training self.dcf_filter
+                self.dcf_init()
+                flag = 'not_found' # do not update the memory
 
 
         # ------- online DF ------- #
