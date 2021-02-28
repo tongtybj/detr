@@ -64,7 +64,18 @@ class Tracker():
         self.dcf_fparams = TensorList(self.dcf_params.features.get_fparams('feature_params').list() * len(dcf_layers))
         self.dcf_params.train_skipping = 10 # TODO: tuning 10 - 20 (vot-toolkit)
         self.dcf_params.sample_memory_size  = dcf_sample_memory_size
-        #self.dcf_params.hard_negative_learning_rate = 0.075
+        #self.dcf_params.hard_negative_learning_rate = 0.5 #0.075
+
+        # smaller augmentation with more init samples
+        self.dcf_params.augmentation = {'fliplr': True,
+                                        'rotate': [-5, 10, -30, 60],
+                                        'blur': [(2, 0.2), (1, 3)],
+                                        'relativeshift': [(0.6, 0.6), (-0.6, -0.6)],
+                                        'dropout': (3, 0.2)}
+
+
+        self.init_training_frame_num = 1 # parameter => important factor
+
         self.dcf_feature_sz = dcf_size
 
         self.dcf_layers = dcf_layers
@@ -126,10 +137,28 @@ class Tracker():
         self.init_template = self.image_normalize(np.round(template_image).astype(np.uint8)).cuda()
         self.first_frame = True
 
-        self.dcf_init(image, channel_avg, scale_z)
-
         self.init_target_sz = self.target_sz
         self.init_s_x = s_x
+
+
+        # dcf initialize
+        self.dcf_frame_num = 1
+        self.init_training_images = []
+        self.init_training_target_pos = []
+        self.init_training_target_sz = []
+        self.init_training_target_scale = []
+        self.init_training_image_channel_avgs = []
+
+        self.init_training_images.append(copy.deepcopy(image))
+        self.init_training_target_pos.append(copy.deepcopy(self.target_pos))
+        self.init_training_target_sz.append(copy.deepcopy(self.target_sz))
+        self.init_training_image_channel_avgs.append(channel_avg)
+        self.init_training_target_scale.append(1 / scale_z)
+        self.dcf_target_scale = 1/ scale_z
+
+        if self.dcf_frame_num == self.init_training_frame_num:
+            # do initialize training for online DCF
+            self.dcf_init()
 
         # for visualize
         debug_bbox = torch.round(box_cxcywh_to_xyxy(torch.cat([torch.tensor([63.5, 63.5]),  torch.Tensor([bbox[2], bbox[3]]) * scale_z]))).int()
@@ -139,17 +168,16 @@ class Tracker():
 
         return {'template_image': debug_image}
 
-    def dcf_init(self, image, channel_avg, scale_z):
+    def dcf_init(self):
+
+        assert len(self.init_training_images) == len(self.init_training_target_pos) == len(self.init_training_image_channel_avgs) == len(self.init_training_target_sz) == len(self.init_training_target_scale) == self.init_training_frame_num
 
         # Initialize some stuff
-        self.dcf_frame_num = 1
         if not self.dcf_params.has('device'):
             self.dcf_params.device = 'cuda' if self.dcf_params.use_gpu else 'cpu'
 
         # Set search area
         self.dcf_img_sample_sz = self.search_size * torch.ones(2)
-        self.dcf_target_scale = 1 / scale_z
-        self.dcf_base_target_sz = self.target_sz / self.dcf_target_scale
 
         # Set sizes
         self.dcf_img_support_sz = self.dcf_img_sample_sz
@@ -170,24 +198,43 @@ class Tracker():
         self.dcf_init_learning()
 
         # Setup scale bounds
-        self.dcf_image_sz = torch.Tensor([image.shape[0], image.shape[1]]) # height, width
+        all_train_x = None
+        all_init_y = None
+        for im_id, (image, target_pos, target_sz, target_scale, channel_avg) in enumerate(zip(self.init_training_images, self.init_training_target_pos, self.init_training_target_sz, self.init_training_target_scale, self.init_training_image_channel_avgs)):
 
-        # Extract and transform sample
-        train_x = self.dcf_generate_init_samples(image, channel_avg)
+            # if im_id == 0:
+            #     continue
 
-        # Initialize projection matrix
-        self.dcf_init_projection_matrix(train_x)
+            # Extract and transform sample
+            train_x = self.dcf_generate_init_samples(image, target_pos, target_scale, channel_avg)
 
-        # Generate label function
-        init_y = self.dcf_init_label_function(train_x)
+            # Generate label function
+            init_y = self.dcf_init_label_function(train_x, target_pos, target_sz, target_scale)
+
+
+            if all_train_x is None:
+                all_train_x = train_x
+            else:
+                for idx, x in enumerate(train_x):
+                    all_train_x[idx] = torch.cat([all_train_x[idx], x], 0)
+            if all_init_y is None:
+                all_init_y = init_y
+            else:
+                for idx, y in enumerate(init_y):
+                    all_init_y[idx] = torch.cat([all_init_y[idx], y], 0)
+
+        # init Projectiom Matrix
+        self.dcf_projection_matrix = TensorList(
+            [ex.new_zeros(self.dcf_compressed_dim,ex.shape[1],1,1).normal_(0,1/math.sqrt(ex.shape[1])) for ex in all_train_x])
 
         # Init memory
-        self.dcf_init_memory(train_x)
+        self.dcf_init_memory(all_train_x)
 
         # Init optimizer and do initial optimization
         start = time.time()
-        self.dcf_init_optimization(train_x, init_y)
-        #print("init optimization time: {}".format(time.time() - start))
+        self.dcf_init_optimization(all_train_x, all_init_y)
+        # print("init optimization time: {}".format(time.time() - start))
+
 
     def dcf_init_optimization(self, train_x, init_y):
         # Initialize filter
@@ -207,8 +254,8 @@ class Tracker():
         self.projection_reg = self.dcf_fparams.attribute('projection_reg')
 
         self.dcf_joint_problem = FactorizedConvProblem(self.dcf_init_training_samples, init_y, self.dcf_filter_reg,
-                                                   self.projection_reg, self.dcf_params, self.dcf_init_sample_weights,
-                                                   self.dcf_projection_activation, self.dcf_response_activation)
+                                                       self.projection_reg, self.dcf_params, self.dcf_init_sample_weights,
+                                                       self.dcf_projection_activation, self.dcf_response_activation)
 
         # Variable containing both filter and projection matrix
         joint_var = self.dcf_filter.concat(self.dcf_projection_matrix)
@@ -306,28 +353,19 @@ class Tracker():
         # ------- online heatmap and localization ------- #
         self.dcf_frame_num += 1
 
-        # Get sample
-        sample_pos = self.target_pos.round()
-        test_x = self.dcf_project_sample(self.dcf_feature_preprocess(all_features))
+        dcf_heatmap = None
+        flag = 'initialize'
 
-        # Compute scores
-        scores_raw = self.dcf_apply_filter(test_x)
-        translation_vec, s, flag = self.dcf_localize_target(scores_raw)
-        dcf_heatmap = torch.clamp(s[0], min = 0)
-        dcf_max_score = torch.max(dcf_heatmap).item()
+        if self.dcf_frame_num > self.init_training_frame_num:
+            # Get sample
+            sample_pos = self.target_pos.round()
+            test_x = self.dcf_project_sample(self.dcf_feature_preprocess(all_features))
 
-
-        if flag != 'not_found':
-            # Update pos
-            new_pos = sample_pos + translation_vec
-
-            # boundary margin
-            inside_ratio = 0.2
-            inside_offset = (inside_ratio - 0.5) * self.target_sz
-
-        else:
-            dcf_heatmap = None
-            raise ValueError("we should not get not_found result from online heatmap updating")
+            # Compute scores
+            scores_raw = self.dcf_apply_filter(test_x)
+            translation_vec, s, flag = self.dcf_localize_target(scores_raw)
+            dcf_heatmap = torch.clamp(s[0], min = 0)
+            dcf_max_score = torch.max(dcf_heatmap).item()
 
         if self.boundary_flag:
             flag = 'recovery'
@@ -419,50 +457,75 @@ class Tracker():
 
 
 
-        # ------- online heatmap ------- #
+        # ------- online DF ------- #
+        if self.dcf_frame_num <= self.init_training_frame_num:
 
-        # Check flags and set learning rate if hard negative
-        update_flag = flag not in ['not_found', 'uncertain']
-        hard_negative = (flag == 'hard_negative')
-        learning_rate = self.dcf_params.hard_negative_learning_rate if hard_negative else None
+            self.init_training_images.append(image)
+            self.init_training_target_pos.append(self.target_pos)
+            self.init_training_target_sz.append(self.target_sz)
+            self.init_training_target_scale.append(self.dcf_target_scale) # TODO:: please calculate from target_sz
+            self.init_training_image_channel_avgs.append(channel_avg)
 
-        if update_flag:
-            # Get train sample
-            train_x = TensorList([x[0:1, ...] for x in test_x])
+            if self.dcf_frame_num == self.init_training_frame_num:
+                # do initialize training for online DCF
+                print("do initialize for DCF")
+                self.dcf_init()
 
-            # Create label for sample
-            train_y = self.dcf_get_label_function(sample_pos, self.dcf_target_scale)
+                ## debug
+                sample_pos = self.target_pos.round()
+                test_x = self.dcf_project_sample(self.dcf_feature_preprocess(all_features))
 
-            # Update memory
-            self.dcf_update_memory(train_x, train_y, learning_rate)
+                # Compute scores
+                scores_raw = self.dcf_apply_filter(test_x)
+                translation_vec, s, flag = self.dcf_localize_target(scores_raw)
+                dcf_heatmap = torch.clamp(s[0], min = 0)
+                dcf_max_score = torch.max(dcf_heatmap).item()
 
-            # Update image
-            self.prev_image = image
-            self.prev_channel_avg = channel_avg
+        else:
+            # Check flags and set learning rate if hard negative
+            update_flag = flag not in ['not_found', 'uncertain']
+            hard_negative = (flag == 'hard_negative')
+            learning_rate = self.dcf_params.hard_negative_learning_rate if hard_negative else None
 
-        # Train filter
-        if hard_negative:
-            start = time.time()
-            self.dcf_filter_optimizer.run(self.dcf_params.hard_negative_CG_iter)
-            #print("hard negative dcf updating time: {}".format(time.time() - start))
-        elif (self.dcf_frame_num-1) % self.dcf_params.train_skipping == 0:
-            start = time.time()
-            self.dcf_filter_optimizer.run(self.dcf_params.CG_iter)
-            #print("periodic dcf updating time: {}".format(time.time() - start))
+            if update_flag:
+                # Get train sample
+                train_x = TensorList([x[0:1, ...] for x in test_x])
+
+                # Create label for sample
+                train_y = self.dcf_get_label_function(self.target_pos, sample_pos, self.dcf_target_scale)
+
+                # Update memory
+                self.dcf_update_memory(train_x, train_y, learning_rate)
+
+                # Update image
+                self.prev_image = image
+                self.prev_channel_avg = channel_avg
+
+            # Train filter
+            if hard_negative:
+                start = time.time()
+                self.dcf_filter_optimizer.run(self.dcf_params.hard_negative_CG_iter)
+                #print("hard negative dcf updating time: {}".format(time.time() - start))
+            elif (self.dcf_frame_num-1) % self.dcf_params.train_skipping == 0:
+                start = time.time()
+                self.dcf_filter_optimizer.run(self.dcf_params.CG_iter)
+                #print("periodic dcf updating time: {}".format(time.time() - start))
 
         # Return new state
         # NOTE: if you use a tensor and [[1:0]], which got worse performance, don't know why
-        new_state = [self.target_pos[1] - self.target_sz[1] / 2, self.target_pos[0] - self.target_sz[0] / 2,
+        state = [self.target_pos[1] - self.target_sz[1] / 2, self.target_pos[0] - self.target_sz[0] / 2,
                      self.target_pos[1] + self.target_sz[1] / 2, self.target_pos[0] + self.target_sz[0] / 2]
 
-        out['bbox'] =  new_state
+        out['bbox'] =  state
 
-        out['score'] = dcf_max_score
-
-        out['dcf_heatmap'] = (torch.round(dcf_heatmap.permute(1,2,0) * 255)).detach().cpu().numpy().astype(np.uint8)
-        if 'resized_dcf_heatmap' in out:
-            if out['resized_dcf_heatmap'] is not None:
-                out['dcf_heatmap'] = (np.round(out['resized_dcf_heatmap'] * 255)).astype(np.uint8)
+        if self.dcf_frame_num >  self.init_training_frame_num:
+            out['score'] = dcf_max_score
+            out['dcf_heatmap'] = (torch.round(dcf_heatmap.permute(1,2,0) * 255)).detach().cpu().numpy().astype(np.uint8)
+            if 'resized_dcf_heatmap' in out:
+                if out['resized_dcf_heatmap'] is not None:
+                    out['dcf_heatmap'] = (np.round(out['resized_dcf_heatmap'] * 255)).astype(np.uint8)
+        else:
+            out['score'] = 0
 
         return out
 
@@ -644,12 +707,12 @@ class Tracker():
         rec_search_image = np.round(0.4 * heatmap_color + 0.6 * rec_search_image.copy()).astype(np.uint8)
 
 
-        # self.dcf_target_scale = torch.sqrt(self.target_sz.prod() / self.dcf_base_target_sz.prod())
-        self.dcf_target_scale = 1 / siamfc_like_scale(bbox)[1] # TODO: redundant with the begining of this functin
+        ## import to be here
+        self.dcf_target_scale = 1 / siamfc_like_scale(bbox)[1]
 
         if self.init_trtr_score is None:
             self.init_trtr_score = trtr_score
-        if self.init_dcf_score is None:
+        if self.init_dcf_score is None and dcf_heatmap is not None:
             self.init_dcf_score = unroll_resized_dcf_heatmap[best_idx].item()
 
 
@@ -784,7 +847,7 @@ class Tracker():
             raise ValueError('Unknown activation')
 
 
-    def dcf_generate_init_samples(self, im: np.ndarray, padding_value: float):
+    def dcf_generate_init_samples(self, im: np.ndarray, target_pos, target_scale, padding_value: float):
         """Generate augmented initial samples."""
 
         # Compute augmentation size
@@ -820,7 +883,7 @@ class Tracker():
             self.dcf_transforms.extend([augmentation.Rotate(angle, aug_output_sz, get_rand_shift()) for angle in self.dcf_params.augmentation['rotate']])
 
         # Generate initial samples
-        init_samples = self.dcf_extract_transformed(im, self.target_pos, self.dcf_target_scale, aug_expansion_sz, self.dcf_transforms, padding_value)
+        init_samples = self.dcf_extract_transformed(im, target_pos, target_scale, aug_expansion_sz, self.dcf_transforms, padding_value)
 
         # Add dropout samples
         if 'dropout' in self.dcf_params.augmentation:
@@ -833,24 +896,17 @@ class Tracker():
 
         return TensorList(init_samples)
 
-
-    def dcf_init_projection_matrix(self, x):
-
-        self.dcf_projection_matrix = TensorList(
-            [ex.new_zeros(self.dcf_compressed_dim,ex.shape[1],1,1).normal_(0,1/math.sqrt(ex.shape[1])) for ex in x])
-        # TODO: why need normal_?
-        #print("====     dcf_projection_matrix: ", self.dcf_projection_matrix[0].shape)
-
-    def dcf_init_label_function(self, train_x):
+    def dcf_init_label_function(self, train_x, target_pos, target_sz, target_scale):
         # Allocate label function
         self.dcf_y = TensorList([x.new_zeros(self.dcf_params.sample_memory_size, 1, x.shape[2], x.shape[3]) for x in train_x])
 
         # Output sigma factor
         output_sigma_factor = self.dcf_fparams.attribute('output_sigma_factor')
-        self.dcf_sigma = (self.dcf_feature_sz_list / self.dcf_img_support_sz * self.dcf_base_target_sz).prod().sqrt() * output_sigma_factor * torch.ones(2)
+        base_target_sz = target_sz / target_scale
+        self.dcf_sigma = (self.dcf_feature_sz_list / self.dcf_img_support_sz * base_target_sz).prod().sqrt() * output_sigma_factor * torch.ones(2)
 
         # Center pos in normalized coords (offset becuase of the float)
-        target_center_norm = (self.target_pos - self.target_pos.round()) / (self.dcf_target_scale * self.dcf_img_support_sz)
+        target_center_norm = (target_pos - target_pos.round()) / (target_scale * self.dcf_img_support_sz)
 
         # Generate label functions
         for y, sig, sz, x in zip(self.dcf_y, self.dcf_sigma, self.dcf_feature_sz_list, train_x):
@@ -929,10 +985,10 @@ class Tracker():
 
         return replace_ind
 
-    def dcf_get_label_function(self, sample_pos, sample_scale):
+    def dcf_get_label_function(self, target_pos, sample_pos, sample_scale):
         # Generate label function
         train_y = TensorList()
-        target_center_norm = (self.target_pos - sample_pos) / (sample_scale * self.dcf_img_support_sz)
+        target_center_norm = (target_pos - sample_pos) / (sample_scale * self.dcf_img_support_sz)
         for sig, sz in zip(self.dcf_sigma, self.dcf_feature_sz_list):
             center = sz * target_center_norm + 0.5 * torch.Tensor([(self.dcf_kernel_size[0] + 1) % 2, (self.dcf_kernel_size[1] + 1) % 2])
             train_y.append(dcf.label_function_spatial(sz, sig, center))

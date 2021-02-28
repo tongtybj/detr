@@ -145,6 +145,9 @@ def main(args, tracker):
 
     model_name = args.model_name
 
+    if args.debug_vis:
+        args.vis = True
+
     total_lost = 0
     if args.dataset in ['VOT2016', 'VOT2018', 'VOT2019', 'VOT2020']:
         # restart tracking
