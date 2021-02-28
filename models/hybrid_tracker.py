@@ -98,14 +98,13 @@ class Tracker():
         self.lost_target_cnt_threshold = lost_target_cnt_threshold
         self.last_valid_position = None
         self.lost_target_cnt = 0
-        self.init_trtr_score = None
-        self.init_dcf_score = None
 
         self.hard_negative_recovery = hard_negative_recovery
 
         # false positive
         self.max_false_postive = 3
-        self.valid_score_threshold = 0.25
+        self.relative_valid_score_threshold = 0.25
+        self.absolute_valid_score_threshold = 0.33 # a find tunning parameter from VOT2018 crabs
 
         # initial fast motion
         self.max_translation = get_exemplar_size() / 2  # heuristic paramter to detect fast motion: half of exemplar_size (i.e., 127)
@@ -156,6 +155,9 @@ class Tracker():
         self.init_training_target_sz = []
         self.init_training_target_scale = []
         self.init_training_image_channel_avgs = []
+
+        self.init_trtr_score = None
+        self.init_dcf_score = None
 
         self.init_training_images.append(copy.deepcopy(image))
         self.init_training_target_pos.append(copy.deepcopy(self.target_pos))
@@ -566,7 +568,7 @@ class Tracker():
             resized_dcf_heatmap =  crop_hwc(dcf_heatmap.permute(1,2,0).detach().cpu().numpy(), resized_bbox, self.heatmap_size)
             unroll_resized_dcf_heatmap = torch.tensor(resized_dcf_heatmap).view(self.heatmap_size * self.heatmap_size) / len(self.dcf_layers)
             best_idx = torch.argmax(unroll_resized_dcf_heatmap)
-            #print("the peak in dcf hetmap: {}".format([best_idx % self.heatmap_size, best_idx // self.heatmap_size]))
+            # print("the peak {} in dcf heatmap: {}".format(torch.max(unroll_resized_dcf_heatmap), [best_idx % self.heatmap_size, best_idx // self.heatmap_size]))
         else:
             resized_dcf_heatmap = None
 
@@ -620,8 +622,8 @@ class Tracker():
                 trtr_score = heatmap[idx].item()
                 dcf_score = torch.max(unroll_resized_dcf_heatmap.view(self.heatmap_size, self.heatmap_size)[ty:by, lx:rx]).item()
 
-                if dcf_score / self.init_dcf_score < self.valid_score_threshold * trtr_score / self.init_trtr_score:
-                    #print('false-positive in ({}, {}), trtr score: {} / {}, dcf score: {} / {}, max dcf score: {}'.format(cx, cy, trtr_score, self.init_trtr_score,  dcf_score, self.init_dcf_score, torch.max(dcf_heatmap)))
+                if dcf_score / self.init_dcf_score < self.relative_valid_score_threshold * trtr_score / self.init_trtr_score  and dcf_score < self.absolute_valid_score_threshold * torch.max(dcf_heatmap):
+                    # print('false-positive in ({}, {}), trtr score: {} / {}, dcf score: {} / {}, max dcf score: {}'.format(cx, cy, trtr_score, self.init_trtr_score,  dcf_score, self.init_dcf_score, torch.max(dcf_heatmap)))
 
                     # mask the score around false positive center
                     heatmap.view(self.heatmap_size, self.heatmap_size)[ty:by, lx:rx] = 0

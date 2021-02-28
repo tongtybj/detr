@@ -73,6 +73,7 @@ def main(args, hpnames):
             if idx < len(hparam_set) - 1:
                 model_name += '_'
 
+        model_name += '_false_positive' # workaround to distinguish with old model name
         #print(model_name)
         model_dir = os.path.join(dataset_path, model_name)
         if not os.path.isdir(model_dir):
