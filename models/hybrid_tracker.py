@@ -103,6 +103,10 @@ class Tracker():
 
         self.hard_negative_recovery = hard_negative_recovery
 
+        # false positive
+        self.max_false_postive = 3
+        self.valid_score_threshold = 0.25
+
     def init(self, image, bbox):
 
         # Get position and size
@@ -542,7 +546,7 @@ class Tracker():
             resized_dcf_heatmap = None
 
         heatmap = trtr_outputs['pred_heatmap'][0].cpu() # we only address with a single image
-        raw_heatmap = heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format, for visualize
+        raw_heatmap = torch.clone(heatmap).view(self.heatmap_size, self.heatmap_size) # as a image format, for visualize
         found = torch.max(heatmap) > self.score_threshold
 
 
@@ -575,6 +579,32 @@ class Tracker():
 
         if dcf_flag == 'hard_negative' and self.hard_negative_recovery:
             window_factor = 0
+
+        # mask a false-positive based on DCF
+        if dcf_heatmap is not None and self.init_dcf_score is not None:
+            for i in range(self.max_false_postive):
+                idx = torch.argmax(heatmap)
+
+                cx = idx.item() % self.heatmap_size
+                cy = idx.item() // self.heatmap_size
+                lx = max(int(cx - round(self.heatmap_size * 0.05)), 0)
+                rx = min(int(cx + round(self.heatmap_size * 0.05)), self.heatmap_size-1)
+                ty = max(int(cy - round(self.heatmap_size * 0.05)), 0)
+                by = min(int(cy + round(self.heatmap_size * 0.05)), self.heatmap_size-1)
+
+                trtr_score = heatmap[idx].item()
+                dcf_score = torch.max(unroll_resized_dcf_heatmap.view(self.heatmap_size, self.heatmap_size)[ty:by, lx:rx]).item()
+
+                if dcf_score / self.init_dcf_score < self.valid_score_threshold * trtr_score / self.init_trtr_score:
+                    #print('false-positive in ({}, {}), trtr score: {} / {}, dcf score: {} / {}, max dcf score: {}'.format(cx, cy, trtr_score, self.init_trtr_score,  dcf_score, self.init_dcf_score, torch.max(dcf_heatmap)))
+
+                    # mask the score around false positive center
+                    heatmap.view(self.heatmap_size, self.heatmap_size)[ty:by, lx:rx] = 0
+                else:
+                    #print('target in ({}, {}), trtr score: {} / {}, dcf score: {} / {}'.format(cx, cy, trtr_score, self.init_trtr_score,  dcf_score, self.init_dcf_score))
+
+                    # stop search false-positive
+                    break
 
         for i in range(self.window_steps):
             # add distance penalty
