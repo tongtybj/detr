@@ -105,6 +105,10 @@ class Tracker():
         self.relative_valid_score_threshold = 0.25
         self.absolute_valid_score_threshold = 0.66 # a fine tuning parameter based on VOT2019 balls
 
+        # do not do false positive remover if we have to do recovery from boundary or lost target
+        if self.boundary_recovery or self.lost_target_recovery:
+            self.max_false_postive = 0
+
         # initial fast motion
         self.max_translation = get_exemplar_size() / 2  # heuristic paramter to detect fast motion: half of exemplar_size (i.e., 127)
         self.expand_search_size = 500 # max for backbone of resnet50
