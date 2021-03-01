@@ -103,7 +103,7 @@ class Tracker():
         # false positive
         self.max_false_postive = 3
         self.relative_valid_score_threshold = 0.25
-        self.absolute_valid_score_threshold = 0.33 # a find tunning parameter from VOT2018 crabs
+        self.absolute_valid_score_threshold = 0.66 # a fine tuning parameter based on VOT2019 balls
 
         # initial fast motion
         self.max_translation = get_exemplar_size() / 2  # heuristic paramter to detect fast motion: half of exemplar_size (i.e., 127)
@@ -621,8 +621,8 @@ class Tracker():
                 trtr_score = heatmap[idx].item()
                 dcf_score = torch.max(unroll_resized_dcf_heatmap.view(self.heatmap_size, self.heatmap_size)[ty:by, lx:rx]).item()
 
-                if dcf_score / self.init_dcf_score < self.relative_valid_score_threshold * trtr_score / self.init_trtr_score  and dcf_score < self.absolute_valid_score_threshold * torch.max(dcf_heatmap):
-                    # print('false-positive in ({}, {}), trtr score: {} / {}, dcf score: {} / {}, max dcf score: {}'.format(cx, cy, trtr_score, self.init_trtr_score,  dcf_score, self.init_dcf_score, torch.max(dcf_heatmap)))
+                if dcf_score / self.init_dcf_score < self.relative_valid_score_threshold * trtr_score / self.init_trtr_score  and dcf_score < self.absolute_valid_score_threshold * torch.max(unroll_resized_dcf_heatmap):
+                    #print('false-positive in ({}, {}), trtr score: {} / {}, dcf score: {} / {}, max dcf score: {}'.format(cx, cy, trtr_score, self.init_trtr_score,  dcf_score, self.init_dcf_score, torch.max(unroll_resized_dcf_heatmap)))
 
                     # mask the score around false positive center
                     heatmap.view(self.heatmap_size, self.heatmap_size)[ty:by, lx:rx] = 0
