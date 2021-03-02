@@ -110,7 +110,9 @@ class Tracker():
 
         # initial fast motion
         self.max_translation = get_exemplar_size() / 2  # heuristic paramter to detect fast motion: half of exemplar_size (i.e., 127)
-        self.expand_search_size = 500 # max for backbone of resnet50
+        self.default_search_size = search_size # max for backbone of resnet50
+        self.expand_search_size = 500  # max for backbone of resnet50
+        self.defualt_window_factor = window_factor
 
     def init(self, image, bbox):
 
@@ -122,6 +124,15 @@ class Tracker():
         self.target_pos = torch.Tensor([bbox[1] + bbox[3]/2, bbox[0] + bbox[2]/2]) # center
         self.init_target_pos = self.target_pos
         self.target_sz = torch.Tensor([bbox[3], bbox[2]]) # real size in pixel
+
+        # For restart 
+        self.search_size = self.default_search_size
+        self.window_factor = self.defualt_window_factor # heuristic
+        stride = self.model.backbone.stride
+        self.heatmap_size = (self.search_size + stride - 1) // stride
+        hanning = np.hanning(self.heatmap_size)
+        self.window = torch.as_tensor(np.outer(hanning, hanning).flatten())
+
 
         # TrTr
         bbox_xyxy  = [bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]]
