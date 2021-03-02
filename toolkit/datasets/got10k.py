@@ -38,6 +38,11 @@ class GOT10kDataset(Dataset):
 
         pbar = tqdm(video_names, desc='loading '+name, ncols=100)
 
+        if os.path.isdir(os.path.join(dataset_root, 'ground_truth')):
+            self.has_ground_truth = True
+        else:
+            self.has_ground_truth = False
+
         self.videos = {}
         for video in pbar:
 
@@ -53,6 +58,12 @@ class GOT10kDataset(Dataset):
             gt_rects = [[0,0,0,0]] * len(img_names)
             with open(os.path.join(dataset_root, video, 'groundtruth.txt'), 'r') as f:
                 gt_rects[0] = list(map(float, f.readline().strip().split(',')))
+
+            if self.has_ground_truth:
+                init_rect = gt_rects[0]
+                with open(os.path.join(dataset_root, 'ground_truth', video, video +'_001.txt'), 'r') as f:
+                    gt_rects = [list(map(float, x.strip().split(','))) for x in f.read().splitlines()]
+                assert gt_rects[0] == init_rect
 
             self.videos[video] = GOT10kVideo(video, dataset_root, gt_rects, img_names)
 

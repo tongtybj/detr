@@ -5,6 +5,7 @@ class Dataset(object):
         self.name = name
         self.dataset_root = dataset_root
         self.videos = None
+        self.has_ground_truth = True
 
     def __getitem__(self, idx):
         if isinstance(idx, str):

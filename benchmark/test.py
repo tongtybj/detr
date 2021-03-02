@@ -127,6 +127,8 @@ def get_args_parser():
     parser.add_argument('--result_path', default='results', type=str)
     parser.add_argument('--external_tracker', default="", type=str)
 
+    parser.add_argument('--save_image_num_per_video', default=1, type=int)
+
 
     return parser
 
@@ -296,9 +298,14 @@ def main(args, tracker):
         # OPE tracking
 
         find_best = True
-        if args.dataset in ['TrackingNet', 'GOT-10k']:
+
+        if not dataset.has_ground_truth:
             find_best = False
 
+        # if repeat 3 times for GOT-10k, use the official benchmark mode (no find best)
+        if args.dataset == 'GOT-10k':
+            if args.repetition == 3:
+                find_best = False
 
         for v_idx, video in enumerate(dataset):
             if args.video != '':
@@ -323,6 +330,12 @@ def main(args, tracker):
                     print("Abolish reset of trails ({}~) becuase the min lost number is small enough: {} / {}".format(cnt+1 , min_lost_number, args.min_lost_rate_for_repeat * len(video)))
                     break
 
+                save_image_offset = 0
+                if args.save_image_num_per_video > 1:
+                    save_image_offset = len(video) // (args.save_image_num_per_video - 1)
+                if args.save_image_num_per_video == 0:
+                    save_image_offset = 1
+
                 for idx, (img, gt_bbox) in enumerate(video):
                     tic = cv2.getTickCount()
                     if idx == 0:
@@ -339,6 +352,25 @@ def main(args, tracker):
 
                     toc += cv2.getTickCount() - tic
                     track_times.append((cv2.getTickCount() - tic)/cv2.getTickFrequency())
+
+                    gt_bbox_int = list(map(lambda x: int(x) if not np.isnan(x) else 0, gt_bbox))
+                    pred_bbox_int = list(map(int, pred_bbox))
+                    cv2.rectangle(img, (gt_bbox_int[0], gt_bbox_int[1]),
+                                  (gt_bbox_int[0]+gt_bbox_int[2], gt_bbox_int[1]+gt_bbox_int[3]), (0, 255, 0), 3)
+                    cv2.rectangle(img, (pred_bbox_int[0], pred_bbox_int[1]),
+                                  (pred_bbox_int[0]+pred_bbox_int[2], pred_bbox_int[1]+pred_bbox_int[3]), (0, 255, 255), 3)
+                    cv2.putText(img, str(idx), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                    if save_image_offset > 0:
+
+                        image_path = os.path.join(args.result_path, args.dataset, model_name, 'images', video.name)
+                        if not os.path.isdir(image_path):
+                            os.makedirs(image_path)
+
+                        if idx % save_image_offset == 0:
+                            imagename = os.path.join(image_path,  'image{:03d}.jpg'.format(idx))
+                            cv2.imwrite(imagename,img)
+
+
                     if idx == 0:
                         if args.vis:
                             cv2.destroyAllWindows()
@@ -357,13 +389,6 @@ def main(args, tracker):
 
 
                         if args.vis or args.debug_vis:
-                            gt_bbox = list(map(lambda x: int(x) if not np.isnan(x) else 0, gt_bbox))
-                            pred_bbox = list(map(int, pred_bbox))
-                            cv2.rectangle(img, (gt_bbox[0], gt_bbox[1]),
-                                          (gt_bbox[0]+gt_bbox[2], gt_bbox[1]+gt_bbox[3]), (0, 255, 0), 3)
-                            cv2.rectangle(img, (pred_bbox[0], pred_bbox[1]),
-                                          (pred_bbox[0]+pred_bbox[2], pred_bbox[1]+pred_bbox[3]), (0, 255, 255), 3)
-                            cv2.putText(img, str(idx), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
                             cv2.imshow(video.name, img)
 
                             if args.debug_vis:
