@@ -34,20 +34,19 @@ class GOT10kVideo(Video):
         if isinstance(tracker_names, str):
             tracker_names = [tracker_names]
         for name in tracker_names:
-            traj_file = os.path.join(path, name, self.name, self.name + '_001.txt')
-            if os.path.exists(traj_file):
-                with open(traj_file, 'r') as f :
-                    pred_traj = [list(map(float, x.strip().split(',')))
+            traj_files = glob(os.path.join(path, name, self.name, self.name + '_00?.txt'))
+            pred_traj = []
+            for traj_file in traj_files:
+                with open(traj_file, 'r') as f:
+                    traj = [list(map(float, x.strip().split(',')))
                             for x in f.readlines()]
-                if len(pred_traj) != len(self.gt_traj):
-                    print(name, len(pred_traj), len(self.gt_traj), self.name)
-                if store:
-                    self.pred_trajs[name] = pred_traj
-                else:
-                    return pred_traj
+                    pred_traj.append(traj)
+
+            if store:
+                self.pred_trajs[name] = pred_traj
             else:
-                print(traj_file)
-        self.tracker_names = list(self.pred_trajs.keys())
+                return pred_traj
+
 
 class GOT10kDataset(Dataset):
     """

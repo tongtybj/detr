@@ -84,26 +84,15 @@ def main(args):
 
     elif 'GOT-10k' == args.dataset:
         dataset = GOT10kDataset(args.dataset, root)
-        if dataset.has_ground_truth:
-            dataset.set_tracker(tracker_dir, trackers)
-            benchmark = OPEBenchmark(dataset)
-            success_ret = {}
-            with Pool(processes=args.num) as pool:
-                for ret in tqdm(pool.imap_unordered(benchmark.eval_success,
-                    trackers), desc='eval success', total=len(trackers), ncols=100):
-                    success_ret.update(ret)
-            precision_ret = {}
-            with Pool(processes=args.num) as pool:
-                for ret in tqdm(pool.imap_unordered(benchmark.eval_precision,
-                    trackers), desc='eval precision', total=len(trackers), ncols=100):
-                    precision_ret.update(ret)
-            norm_precision_ret = {}
-            with Pool(processes=args.num) as pool:
-                for ret in tqdm(pool.imap_unordered(benchmark.eval_norm_precision,
-                    trackers), desc='eval norm precision', total=len(trackers), ncols=100):
-                    norm_precision_ret.update(ret)
-            benchmark.show_result(success_ret, precision_ret, norm_precision_ret,
-                    show_video_level=args.show_video_level)
+        dataset.set_tracker(tracker_dir, trackers)
+        ar_benchmark = AccuracyRobustnessBenchmark(dataset)
+        ar_result = {}
+        with Pool(processes=args.num) as pool:
+            for ret in tqdm(pool.imap_unordered(ar_benchmark.eval,
+                trackers), desc='eval ar', total=len(trackers), ncols=100):
+                ar_result.update(ret)
+
+        ar_results = ar_benchmark.show_result(ar_result, show_video_level=args.show_video_level)
     elif 'TrackingNet' == args.dataset:
         dataset = TrackingNetDataset(args.dataset, root)
         if dataset.has_ground_truth:

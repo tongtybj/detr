@@ -434,7 +434,10 @@ def main(args, tracker):
                     video_path = os.path.join(args.result_path, args.dataset, model_name, video.name)
                     if not os.path.isdir(video_path):
                         os.makedirs(video_path)
-                    result_path = os.path.join(video_path, '{}_{:03d}.txt'.format(video.name, cnt+1))
+                    id = cnt + 1
+                    if find_best:
+                        id = 1
+                    result_path = os.path.join(video_path, '{}_{:03d}.txt'.format(video.name, id))
                     with open(result_path, 'w') as f:
                         for x in pred_bboxes:
                             f.write(','.join([vot_float2str("%.4f", i) for i in x ])+'\n')
