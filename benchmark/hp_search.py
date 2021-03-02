@@ -14,6 +14,11 @@ def get_args_parser(parser, hpnames):
     for name in hpnames:
         parser.add_argument('--' + name, default=[], nargs='+')
 
+    parser.add_argument('--separate_mode', action='store_true',
+                        help="best score mode if separate_mode is false")
+
+    parser.add_argument('--save_path', default='hp_search', type=str)
+    
     return parser
 
 def main(args, hpnames):
@@ -24,6 +29,13 @@ def main(args, hpnames):
 
     if len(args.dcf_layers) == 0:
         args.dcf_layers = ['layer2', 'layer3']
+
+    # separate mode or best score mode
+    repetition = 1
+    if args.separate_mode:
+        repetition = args.repetition
+        args.repetition  = 1 # separate model (non best score model)
+        
 
     # create dir for result
     layers_info = 'trtr_layer'
@@ -37,7 +49,9 @@ def main(args, hpnames):
             layers_info += '_' + layer[-1]
 
 
-    args.result_path = os.path.join('hp_search',
+    if args.separate_mode:
+        args.save_path += '_separate'
+    args.result_path = os.path.join(args.save_path,
                                     os.path.splitext(os.path.basename(args.checkpoint))[0],
                                     layers_info)
     dataset_path = os.path.join(args.result_path, args.dataset)
@@ -56,7 +70,7 @@ def main(args, hpnames):
             hparams[name] = [default_value]
         else:
             hparams[name] = [type(default_value)(v) for v in val]
-
+    hparams['run'] = list(range(1, repetition + 1))
 
     tracker_num = len(list(itertools.product(*hparams.values())))
 
@@ -65,15 +79,16 @@ def main(args, hpnames):
         print("start {}/{} tracker test".format(tracker_id + 1, tracker_num))
         model_name = ''
         for idx, (name, val) in enumerate(zip(hparams.keys(), hparam_set)):
-            name = name[:-1] # core name
-            assert hasattr(args, name)
-            setattr(args, name, val)
+            if hasattr(args, name):
+                name = name[:-1] # core name
+                setattr(args, name, val)
 
             model_name += name + "_" + str(val).replace('.', 'p')
             if idx < len(hparam_set) - 1:
                 model_name += '_'
 
         model_name += '_false_positive' # workaround to distinguish with old model name
+        
         #print(model_name)
         model_dir = os.path.join(dataset_path, model_name)
         if not os.path.isdir(model_dir):

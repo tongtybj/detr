@@ -452,8 +452,8 @@ def main(args, tracker):
                         for x in pred_bboxes:
                             f.write(','.join([vot_float2str("%.4f", i) for i in x])+'\n')
 
-                log = '({:3d}) Video: {:12s} Trail: {:2d}  Time: {:5.1f}s Speed: {:3.1f}fps Lost: {:d}/{:d}'.format(
-                    v_idx+1, video.name, cnt+1, toc, idx / toc, lost_number, len(video))
+                log = '({:3d}) Video: {:12s} Trail: {:2d}  Time: {:5.1f}s Speed: {:3.1f}fps Lost: {:d}/{:d} Repetition: {:d}'.format(
+                    v_idx+1, video.name, cnt+1, toc, idx / toc, lost_number, len(video), cnt)
                 print(log)
                 with open(os.path.join(args.result_path, args.dataset, model_name, 'log.txt'), 'a') as f:
                     f.write(log + '\n')
