@@ -64,7 +64,6 @@ class Tracker():
         self.dcf_fparams = TensorList(self.dcf_params.features.get_fparams('feature_params').list() * len(dcf_layers))
         self.dcf_params.train_skipping = 10 # TODO: tuning 10 - 20 (vot-toolkit)
         self.dcf_params.sample_memory_size  = dcf_sample_memory_size
-        self.dcf_params.hard_negative_learning_rate = 0.075
 
         # smaller augmentation with more init samples
         self.init_training_frame_num = 1 # parameter => important factor
