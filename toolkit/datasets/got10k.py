@@ -22,6 +22,33 @@ class GOT10kVideo(Video):
                 gt_rects[0], img_names, gt_rects, None, load_img)
 
 
+    def load_tracker(self, path, tracker_names=None, store=True):
+        """
+        Args:
+            path(str): path to result
+            tracker_name(list): name of tracker
+        """
+        if not tracker_names:
+            tracker_names = [x.split('/')[-1] for x in glob(path)
+                    if os.path.isdir(x)]
+        if isinstance(tracker_names, str):
+            tracker_names = [tracker_names]
+        for name in tracker_names:
+            traj_file = os.path.join(path, name, self.name, self.name + '_001.txt')
+            if os.path.exists(traj_file):
+                with open(traj_file, 'r') as f :
+                    pred_traj = [list(map(float, x.strip().split(',')))
+                            for x in f.readlines()]
+                if len(pred_traj) != len(self.gt_traj):
+                    print(name, len(pred_traj), len(self.gt_traj), self.name)
+                if store:
+                    self.pred_trajs[name] = pred_traj
+                else:
+                    return pred_traj
+            else:
+                print(traj_file)
+        self.tracker_names = list(self.pred_trajs.keys())
+
 class GOT10kDataset(Dataset):
     """
     Args:
