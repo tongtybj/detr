@@ -78,17 +78,23 @@ def main(args, hpnames):
         t = time.time()
         print("start {}/{} tracker test".format(tracker_id + 1, tracker_num))
         model_name = ''
+        if args.use_baseline_tracker:
+            model_name = 'baseline_'
         for idx, (name, val) in enumerate(zip(hparams.keys(), hparam_set)):
             if hasattr(args, name):
                 name = name[:-1] # core name
                 setattr(args, name, val)
 
+            if args.use_baseline_tracker and 'dcf' in name:
+                continue
+
             model_name += name + "_" + str(val).replace('.', 'p')
             if idx < len(hparam_set) - 1:
                 model_name += '_'
 
-        model_name += '_false_positive' # workaround to distinguish with old model name
-        
+        if not args.use_baseline_tracker:
+            model_name += '_false_positive' # workaround to distinguish with old model name
+
         #print(model_name)
         model_dir = os.path.join(dataset_path, model_name)
         if not os.path.isdir(model_dir):
