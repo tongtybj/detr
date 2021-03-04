@@ -23,7 +23,7 @@ class Tracker(object):
         self.postprocess = postprocess
 
         self.search_size = search_size
-        backbone_stride = model.backbone.stride
+        backbone_stride = model.backbone_template.stride
         self.heatmap_size = (search_size + backbone_stride - 1) // backbone_stride
         self.size_lpf = size_lpf
         self.size_penalty_k = size_penalty_k

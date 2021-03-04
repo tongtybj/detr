@@ -42,7 +42,8 @@ class TRTR(nn.Module):
 
         self.input_projs = nn.ModuleList([nn.Conv2d(num_channels, hidden_dim, kernel_size=1) for num_channels in backbone.num_channels_list])
 
-        self.backbone = backbone
+        self.backbone_template = copy.deepcopy(backbone)
+        self.backbone_search = copy.deepcopy(backbone)
         self.aux_loss = aux_loss
 
         self.template_src_projs = []
@@ -87,7 +88,7 @@ class TRTR(nn.Module):
                 # print("do multiple frame mode for backbone")
                 multi_frame = True
 
-            template_features, self.template_pos  = self.backbone(template_samples, multi_frame = multi_frame)
+            template_features, self.template_pos  = self.backbone_template(template_samples, multi_frame = multi_frame)
 
             self.template_mask = None
             if self.transformer_mask:
@@ -102,7 +103,7 @@ class TRTR(nn.Module):
             # print("backbone template mask: {}".format(self.template_mask))
 
         start = time.time()
-        search_features, search_pos  = self.backbone(search_samples)
+        search_features, search_pos  = self.backbone_search(search_samples)
         # print("search image feature extraction: {}".format(time.time() - start))
         search_mask = None
         if self.transformer_mask:
