@@ -783,8 +783,8 @@ class Tracker():
         if self.init_trtr_score is None:
             self.init_trtr_score = trtr_score
         if self.init_dcf_score is None and dcf_heatmap is not None:
-            self.init_dcf_score = unroll_resized_dcf_heatmap[best_idx].item()
-
+            if unroll_resized_dcf_heatmap[best_idx].item() > 0:
+                self.init_dcf_score = unroll_resized_dcf_heatmap[best_idx].item()
 
         return {
             'bbox': bbox,
