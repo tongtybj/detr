@@ -60,8 +60,8 @@ def get_args_parser():
     parser.add_argument('--dcf_layers', default=[], nargs='+')
     parser.add_argument('--weighted', action='store_true',
                         help="the weighted for the multiple input embedding for transformer")
-    parser.add_argument('--transformer_mask', action='store_false',
-                        help="mask for transformer") # workaround to enable transformer mask for default
+    parser.add_argument('--transformer_mask', action='store_true',
+                        help="mask for transformer")
     parser.add_argument('--multi_frame', action='store_true',
                         help="use multi frame for encoder (template images)")
     parser.add_argument('--repetition', default=1, type=int)
@@ -170,7 +170,6 @@ def main(args, tracker):
                 search_image = None
                 raw_heatmap = None
                 post_heatmap = None
-                prev_search_image = None
 
                 for idx, (img, gt_bbox) in enumerate(video):
                     if len(gt_bbox) == 4:
@@ -203,9 +202,6 @@ def main(args, tracker):
                             lost_number += 1
 
                             if args.vis and args.debug_vis:
-
-
-                                cv2.imshow('prev_search_image', prev_search_image)
 
                                 cv2.polylines(img, [np.array(gt_bbox, np.int).reshape((-1, 2))], True, (0, 255, 0), 3)
 
@@ -243,16 +239,10 @@ def main(args, tracker):
 
                         if args.debug_vis:
 
-                            if prev_search_image is not None:
-                                cv2.imshow('prev_search_image', prev_search_image)
-
                             for key, value in outputs.items():
                                 if isinstance(value, np.ndarray):
                                     if len(value.shape) == 3 or len(value.shape) == 2:
                                         cv2.imshow(key, value)
-
-                                        if key == 'search_image':
-                                            prev_search_image = value
 
                             k = cv2.waitKey(0)
                             if k == 27:         # wait for ESC key to exit
@@ -321,7 +311,6 @@ def main(args, tracker):
                 track_times = []
                 template_image = None
                 search_image = None
-                prev_search_image = None
                 raw_heatmap = None
                 post_heatmap = None
                 lost_number = 0
@@ -374,7 +363,7 @@ def main(args, tracker):
                     if idx == 0:
                         if args.vis:
                             cv2.destroyAllWindows()
-                            if args.debug_vis:
+                            if args.debug_vis and isinstance(outputs, dict):
                                 for key, value in outputs.items():
                                     if isinstance(value, np.ndarray):
                                         if len(value.shape) == 3 or len(value.shape) == 2:
@@ -393,16 +382,10 @@ def main(args, tracker):
 
                             if args.debug_vis:
 
-                                if prev_search_image is not None:
-                                    cv2.imshow('prev_search_image', prev_search_image)
-
                                 for key, value in outputs.items():
                                     if isinstance(value, np.ndarray):
                                         if len(value.shape) == 3 or len(value.shape) == 2:
                                             cv2.imshow(key, value)
-
-                                            if key == 'search_image':
-                                                prev_search_image = value
 
                                 k = cv2.waitKey(0)
                                 if k == 27:         # wait for ESC key to exit

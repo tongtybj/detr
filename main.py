@@ -318,7 +318,7 @@ def main(args):
                             best_robustness_int = int(best_ar[1]*1000)
 
                             # record: only inference model
-                            utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / f'checkpoint{epoch:04}_best_ar_{best_accuracy_int:03}_{best_robustness_int:03}_without_transformer_mask_only_inference.pth')
+                            utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / f'checkpoint{epoch:04}_best_ar_{best_accuracy_int:03}_{best_robustness_int:03}_with_transformer_mask_only_inference.pth')
 
 
                 print("benchmark time: {}".format(benchmark_time))
