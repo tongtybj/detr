@@ -283,7 +283,10 @@ class Tracker(object):
             raw_heatmap = (torch.round(raw_heatmap * 255)).detach().numpy().astype(np.uint8)
             post_heatmap = (torch.round(post_heatmap * 255)).detach().numpy().astype(np.uint8)
             heatmap_resize = cv2.resize(raw_heatmap, search_image.shape[1::-1])
-            heatmap_color = np.stack([heatmap_resize, np.zeros(search_image.shape[1::-1], dtype=np.uint8), heatmap_resize], -1)
+            heatmap_h = heatmap_resize / -255 * (127 - 30) * 2  + 127
+            heatmap_sv = np.full(search_image.shape[1::-1], 255, dtype=np.uint8)
+            heatmap_hsv = np.stack([heatmap_h.astype(np.uint8), heatmap_sv, heatmap_sv], -1)
+            heatmap_color = cv2.cvtColor(heatmap_hsv, cv2.COLOR_HSV2BGR)
             rec_search_image = np.round(0.4 * heatmap_color + 0.6 * rec_search_image.copy()).astype(np.uint8)
             # print("postprocess time: {}".format(time.time() - start_time))
 

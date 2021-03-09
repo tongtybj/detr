@@ -186,8 +186,8 @@ class Tracker():
         # for visualize
         debug_bbox = torch.round(box_cxcywh_to_xyxy(torch.cat([torch.tensor([63.5, 63.5]),  torch.Tensor([bbox[2], bbox[3]]) * scale_z]))).int()
         debug_image = cv2.rectangle(template_image,
-                                         (debug_bbox[0], debug_bbox[1]),
-                                         (debug_bbox[2], debug_bbox[3]),(0,255,0),3)
+                                    (debug_bbox[0], debug_bbox[1]),
+                                    (debug_bbox[2], debug_bbox[3]),(0,255,0),3)
 
         return {'template_image': debug_image}
 
@@ -562,14 +562,13 @@ class Tracker():
 
         out['bbox'] =  state
 
-        if self.dcf_frame_num >  self.init_training_frame_num:
-            out['score'] = dcf_max_score
-            out['dcf_heatmap'] = (torch.round(dcf_heatmap.permute(1,2,0) * 255)).detach().cpu().numpy().astype(np.uint8)
-            if 'resized_dcf_heatmap' in out:
-                if out['resized_dcf_heatmap'] is not None:
-                    out['dcf_heatmap'] = (np.round(out['resized_dcf_heatmap'] * 255)).astype(np.uint8)
-        else:
-            out['score'] = 0
+        if out['resized_dcf_heatmap'] is not None:
+            dcf_heatmap = out['resized_dcf_heatmap']
+            heatmap = cv2.resize(dcf_heatmap / len(self.dcf_layers), search_image.shape[1::-1])
+            heatmap_h = heatmap * (30 - 127) * 1.2  + 127
+            heatmap_sv = np.full(search_image.shape[1::-1], 255, dtype=np.uint8)
+            heatmap_hsv = np.stack([heatmap_h.astype(np.uint8), heatmap_sv, heatmap_sv], -1)
+            out['dcf_heatmap'] = cv2.cvtColor(heatmap_hsv, cv2.COLOR_HSV2BGR)
 
         return out
 
@@ -773,8 +772,12 @@ class Tracker():
         raw_heatmap = (torch.round(raw_heatmap * 255)).detach().numpy().astype(np.uint8)
         post_heatmap = (torch.round(post_heatmap * 255)).detach().numpy().astype(np.uint8)
         heatmap_resize = cv2.resize(raw_heatmap, search_image.shape[1::-1])
-        heatmap_color = np.stack([heatmap_resize, np.zeros(search_image.shape[1::-1], dtype=np.uint8), heatmap_resize], -1)
-        rec_search_image = np.round(0.4 * heatmap_color + 0.6 * rec_search_image.copy()).astype(np.uint8)
+
+        heatmap_h = heatmap_resize / -255 * (127 - 30) * 2  + 127
+        heatmap_sv = np.full(search_image.shape[1::-1], 255, dtype=np.uint8)
+        heatmap_hsv = np.stack([heatmap_h.astype(np.uint8), heatmap_sv, heatmap_sv], -1)
+        heatmap_color = cv2.cvtColor(heatmap_hsv, cv2.COLOR_HSV2BGR)
+        rec_search_image = np.round(0.4 * heatmap_color + 0.6 * rec_search_image.copy()).astype(np.uint8) 
 
 
         ## import to be here
@@ -789,9 +792,9 @@ class Tracker():
         return {
             'bbox': bbox,
             'score': best_score,
-            'raw_heatmap': raw_heatmap,
-            'post_heatmap': post_heatmap,
-            'search_image': rec_search_image, # debug
+            'trtr_raw_heatmap': heatmap_color, #raw_heatmap,
+            'trtr_post_heatmap': post_heatmap,
+            'search_image': search_image, # debug
             'resized_dcf_heatmap': resized_dcf_heatmap,
             'trtr_score': trtr_score,
             'bbox_in_search_image': bbox_ct
