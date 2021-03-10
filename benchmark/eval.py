@@ -25,6 +25,8 @@ def get_args_parser():
                         help='number of thread to eval')
     parser.add_argument('--tracker_prefix', '-t', default='',
                         type=str, help='tracker name')
+    parser.add_argument('--draw_plot', action='store_true')
+    parser.add_argument('--bold_trackers', default=[], nargs='+')
     parser.add_argument('--show_video_level', '-s', dest='show_video_level',
                         action='store_true')
     parser.set_defaults(show_video_level=False)
@@ -59,7 +61,9 @@ def main(args):
                 trackers), desc='eval precision', total=len(trackers), ncols=100):
                 precision_ret.update(ret)
         benchmark.show_result(success_ret, precision_ret,
-                show_video_level=args.show_video_level)
+                              show_video_level=args.show_video_level,
+                              draw_plot=args.draw_plot,
+                              bold_trackers = args.bold_trackers)
     elif 'LaSOT' == args.dataset:
         dataset = LaSOTDataset(args.dataset, root)
         dataset.set_tracker(tracker_dir, trackers)
@@ -166,7 +170,6 @@ def main(args):
         ar_eao_results = ar_benchmark.show_result(ar_result, eao_result,
                                                   show_video_level=args.show_video_level)
 
-        # print("eao_result: {}".format(ar_eao_results))
         return ar_eao_results
     elif 'VOT2018-LT' == args.dataset:
         dataset = VOTLTDataset(args.dataset, root)

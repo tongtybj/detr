@@ -4,7 +4,7 @@ import numpy as np
 from .draw_utils import COLOR, LINE_STYLE
 
 def draw_success_precision(success_ret, name, videos, attr, precision_ret=None,
-        norm_precision_ret=None, bold_name=None, axis=[0, 1]):
+        norm_precision_ret=None, bold_names=[], axis=[0, 1]):
     # success plot
     fig, ax = plt.subplots()
     ax.grid(b=True)
@@ -23,7 +23,7 @@ def draw_success_precision(success_ret, name, videos, attr, precision_ret=None,
         success[tracker_name] = np.mean(value)
     for idx, (tracker_name, auc) in  \
             enumerate(sorted(success.items(), key=lambda x:x[1], reverse=True)):
-        if tracker_name == bold_name:
+        if tracker_name in bold_names:
             label = r"\textbf{[%.3f] %s}" % (auc, tracker_name)
         else:
             label = "[%.3f] " % (auc) + tracker_name
@@ -60,7 +60,7 @@ def draw_success_precision(success_ret, name, videos, attr, precision_ret=None,
             precision[tracker_name] = np.mean(value, axis=0)[20]
         for idx, (tracker_name, pre) in \
                 enumerate(sorted(precision.items(), key=lambda x:x[1], reverse=True)):
-            if tracker_name == bold_name:
+            if tracker_name in bold_names:
                 label = r"\textbf{[%.3f] %s}" % (pre, tracker_name)
             else:
                 label = "[%.3f] " % (pre) + tracker_name
@@ -95,7 +95,7 @@ def draw_success_precision(success_ret, name, videos, attr, precision_ret=None,
             norm_precision[tracker_name] = np.mean(value, axis=0)[20]
         for idx, (tracker_name, pre) in \
                 enumerate(sorted(norm_precision.items(), key=lambda x:x[1], reverse=True)):
-            if tracker_name == bold_name:
+            if tracker_name in bold_names:
                 label = r"\textbf{[%.3f] %s}" % (pre, tracker_name)
             else:
                 label = "[%.3f] " % (pre) + tracker_name

@@ -3,6 +3,7 @@ import numpy as np
 from colorama import Style, Fore
 
 from ..utils import overlap_ratio, success_overlap, success_error
+from .. import visualization
 
 class OPEBenchmark:
     """
@@ -37,19 +38,17 @@ class OPEBenchmark:
             success_ret_ = {}
             for video in self.dataset:
                 gt_traj = np.array(video.gt_traj)
-                #print("{}: video.pred_trajs: {}".format(video.name, video.pred_trajs))
                 if tracker_name not in video.pred_trajs:
                     tracker_traj = video.load_tracker(self.dataset.tracker_path,
                             tracker_name, False)
                     tracker_traj = np.array(tracker_traj)
-                    #print("{}: load tracker: {}, traj: {}".format(video.name, tracker_name, tracker_traj))
                 else:
                     tracker_traj = np.array(video.pred_trajs[tracker_name])
-                    #print("{}: reuse tracker: {}, traj: {}".format(video.name, tracker_name, tracker_traj))
                 n_frame = len(gt_traj)
                 if hasattr(video, 'absent'):
                     gt_traj = gt_traj[video.absent == 0]
                     tracker_traj = tracker_traj[video.absent == 0]
+                #print("{}: gt traj: {}, pred traj: {}".format(video.name, len(gt_traj), len(tracker_traj)))
                 success_ret_[video.name] = success_overlap(gt_traj, tracker_traj, n_frame)
             success_ret[tracker_name] = success_ret_
         return success_ret
@@ -125,7 +124,7 @@ class OPEBenchmark:
         return norm_precision_ret
 
     def show_result(self, success_ret, precision_ret=None,
-            norm_precision_ret=None, show_video_level=False, helight_threshold=0.6):
+                    norm_precision_ret=None, show_video_level=False, helight_threshold=0.6, draw_plot = False, bold_trackers = []):
         """pretty print result
         Args:
             result: returned dict from function eval
@@ -196,3 +195,7 @@ class OPEBenchmark:
                         row += precision_str+'|'
                 print(row)
             print('-'*len(header1))
+
+
+        if draw_plot:
+            visualization.draw_success_precision(success_ret, self.dataset.name, self.dataset.videos.keys(), 'ALL',  precision_ret = precision_ret, bold_names = bold_trackers)
