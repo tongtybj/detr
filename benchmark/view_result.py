@@ -18,6 +18,12 @@ from glob import glob
 sys.path.append('..')
 from toolkit.datasets import DatasetFactory
 
+# (B,G,R)
+COLOR = ((0, 0, 255), # red
+         (0, 255, 0), # green
+         (255, 0, 0), # blue
+         (0, 255, 255)) # yellow
+
 def main(args):
 
     # create dataset
@@ -30,7 +36,7 @@ def main(args):
                                             load_img=False,
                                             single_video=args.video)
 
-    result_path = os.path.join(args.tracker_path, args.dataset, args.model_name)
+    result_paths = [os.path.join(args.tracker_path, args.dataset, model_name) for model_name in args.model_names]
 
 
     for v_idx, video in enumerate(dataset):
@@ -39,26 +45,37 @@ def main(args):
             if video.name != args.video:
                 continue
 
+        pred_trajs = []
+        for (model_name, result_path) in zip(args.model_names, result_paths):
+            result_file = os.path.join(result_path, video.name + '.txt')
+            if args.dataset == 'GOT-10k':
+                result_file = os.path.join(result_path, video.name, video.name + '_001.txt')
+            if args.dataset in ['VOT2018', 'VOT2019']:
+                result_file = os.path.join(result_path, 'baseline', video.name, video.name + '_001.txt')
+            if not os.path.exists(result_file):
+                print("cannot find tracking result of {} for No.{} {}".format(model_name, v_idx+1, video.name))
+                continue
 
-        result_file = os.path.join(result_path, video.name + '.txt')
-        if args.dataset == 'GOT-10k':
-            result_file = os.path.join(result_path, video.name, video.name + '_001.txt')
-        if not os.path.exists(result_file):
-            print("cannot find tracking result file for No.{} {}".format(v_idx+1, video.name))
-            continue
+            with open(result_file, 'r') as f:
+                pred_traj = [list(map(lambda v: round(float(v)), x.strip().split(','))) for x in f.read().splitlines()]
 
-        with open(result_file, 'r') as f:
-            pred_bboxes = [list(map(lambda v: round(float(v)), x.strip().split(','))) for x in f.read().splitlines()]
+            if len(pred_traj) != len(video):
+                print("the size of tracking result is wrong: {} vs {}".format(len(pred_traj),len(video)))
+                continue
 
-        if len(pred_bboxes) != len(video):
-            print("the size of tracking result is wrong: {} vs {}".format(len(pred_bboxes),len(video)))
-            continue
+            pred_trajs.append(pred_traj)
 
 
-        for idx, ((img, gt_bbox), bbox) in enumerate(zip(video, pred_bboxes)):
+        pred_trajs = list(zip(*pred_trajs))
 
-            cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[0]+bbox[2], bbox[1]+bbox[3]), (0, 255, 0), 3)
-            cv2.putText(img, str(idx+1), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        for idx, ((img, gt_bbox), bboxes) in enumerate(zip(video, pred_trajs)):
+
+            if args.draw_gt:
+                cv2.rectangle(img, (gt_bbox[0], gt_bbox[1]), (gt_bbox[0]+gt_bbox[2], gt_bbox[1]+gt_bbox[3]), (255, 255, 0), 3)
+            for bbox_id, bbox in enumerate(bboxes):
+                if len(bbox) == 4:
+                    cv2.rectangle(img, (bbox[0], bbox[1]), (bbox[0]+bbox[2], bbox[1]+bbox[3]), COLOR[bbox_id], 4)
+            cv2.putText(img, "#{:03d}".format(idx+1), (10, 50), cv2.FONT_HERSHEY_DUPLEX, 2, (0, 255, 255), 2) # (B,G,R)
 
             wait_time = args.play_speed
             if idx == len(video) -1:
@@ -88,7 +105,8 @@ if __name__ == '__main__':
     parser.add_argument('--dataset_path', default="", type=str, help='path of datasets')
     parser.add_argument('--tracker_path', default="", type=str, help='path of tracker result')
     parser.add_argument('--dataset', type=str, help='the benchmark', default="VOT2018")
-    parser.add_argument('--model_name', default='trtr', type=str)
+    parser.add_argument('--draw_gt', action='store_true')
+    parser.add_argument('--model_names', default=[], nargs='+')
     parser.add_argument('--video', default='', type=str, help='eval one special video')
     parser.add_argument('--play_speed', default=30, type=int, help='video play speed')
     args = parser.parse_args()
