@@ -9,7 +9,7 @@ from glob import glob
 
 from .dataset import Dataset
 from .video import Video
-
+import re
 
 class OTBVideo(Video):
     """
@@ -39,7 +39,7 @@ class OTBVideo(Video):
                 raise ValueError("{}".format(self.name, traj_file))
             assert os.path.exists(traj_file)
             with open(traj_file, 'r') as f :
-                pred_traj = [list(map(float, x.strip().split(',')))
+                pred_traj = [list(map(float, re.split('[,\t]', x.strip())))
                         for x in f.readlines()]
                 if len(pred_traj) != len(self.gt_traj):
                     print(name, len(pred_traj), len(self.gt_traj), self.name)
@@ -99,7 +99,9 @@ class OTBDataset(Dataset):
                         img_names = img_names[len(img_names) - len(gt_rects):]
                     else:
                         img_names = img_names[0:len(gt_rects)]
-
+                if video_name == 'Tiger1':
+                    img_names = img_names[5:]
+                    gt_rects = gt_rects[5:]
 
                 if len(gt_rects) == 0: # corner case of Human4
                     continue
