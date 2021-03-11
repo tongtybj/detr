@@ -13,6 +13,9 @@ class TrackerWrapper:
             param_name = 'default_vot'
         if args.external_tracker == "dimp":
             param_name = 'dimp50_vot18'
+        if args.external_tracker == "prdimp":
+            args.external_tracker = "dimp"
+            param_name = 'prdimp50_vot18'
 
         param_module = importlib.import_module('pytracking.parameter.{}.{}'.format(args.external_tracker, param_name))
         params = param_module.parameters()

@@ -20,6 +20,7 @@ from util.box_ops import get_axis_aligned_bbox
 from toolkit.datasets import DatasetFactory
 from toolkit.utils.region import vot_overlap, vot_float2str
 
+from external_tracker import build_external_tracker
 from models.tracker import build_tracker as build_baseline_tracker
 from models.hybrid_tracker import build_tracker as build_online_tracker
 
@@ -453,6 +454,8 @@ if __name__ == '__main__':
     # create tracker
     if args.use_baseline_tracker:
         tracker = build_baseline_tracker(args)
+    elif args.external_tracker:
+        tracker = build_external_tracker(args)
     else:
         tracker = build_online_tracker(args)
 

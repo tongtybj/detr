@@ -1,7 +1,7 @@
 
 def build_external_tracker(args):
     # external tracker wrapper
-    if args.external_tracker == "atom" or args.external_tracker == "dimp":
+    if args.external_tracker == "atom" or args.external_tracker == "dimp" or args.external_tracker == "prdimp":
         from .wrapper.atom_dimp.wrapper import TrackerWrapper
         return TrackerWrapper(args)
     else:
