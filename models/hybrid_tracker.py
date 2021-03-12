@@ -78,10 +78,10 @@ class Tracker():
 
         self.dcf_layers = dcf_layers
 
-        self.invliad_bbox_cnt = 0
-        self.invliad_bbox_score_cnt = 0
-        self.invliad_bbox_cnt_max = 5 # parameter
-        self.invliad_bbox_score_cnt_max = 1 # parameter
+        self.invalid_bbox_cnt = 0
+        self.invalid_bbox_score_cnt = 0
+        self.invalid_bbox_cnt_max = 5 # parameter
+        self.invalid_bbox_score_cnt_max = 1 # parameter
         self.boundary_margin = 0.01 # parameter: pixel? (300 -> 3)
         self.boundary_target_score_threshold = 0.2 # parameter
         self.relax_size_margin = 0.05
@@ -167,6 +167,10 @@ class Tracker():
 
         # reset recovery
         self.recovery_flag = False
+        self.invalid_bbox_cnt = 0
+        self.invalid_bbox_score_cnt = 0
+        self.lost_target_cnt = 0
+        self.last_valid_position = None
 
         # dcf initialize
         self.dcf_frame_num = 1
@@ -726,9 +730,8 @@ class Tracker():
         # check boundary issue
         margin = np.array(img_shape) * self.boundary_margin
         if bbox[0] <= margin[1] or bbox[1] < margin[0] or bbox[2] > img_shape[1]-1 - margin[1] or bbox[3] > img_shape[0]-1 - margin[0]:
-
             if self.boundary_recovery:
-                self.invliad_bbox_cnt += 1
+                self.invalid_bbox_cnt += 1
 
                 # too small bbox, instant recovery
                 if bbox[0] <= margin[1] or bbox[2] > img_shape[1]-1 - margin[1]:
@@ -744,7 +747,7 @@ class Tracker():
                 if width <= self.hard_size_margin * img_shape[1] and height <= self.hard_size_margin * img_shape[0]:
                     self.recovery_flag = True
 
-            if self.invliad_bbox_cnt > self.invliad_bbox_cnt_max:
+            if self.invalid_bbox_cnt > self.invalid_bbox_cnt_max:
 
                 dcf_heatmap = self.dcf_localize_target(operation.conv2d(test_x, self.init_dcf_filter, mode='same'))[1][0]
                 check_region = torch.tensor([self.search_size //2 - int(height * scale_z / 2),
@@ -757,17 +760,16 @@ class Tracker():
                 check_region = check_region.int()
                 trtr_score = torch.max(heatmap.view(self.heatmap_size, self.heatmap_size)[check_region[1]:check_region[3],check_region[0]:check_region[2]])
 
-                #print("boundary!!! max score of trtr heatmap: {} / {}, max score of dcf heatmap: {} / {}, count: {}, margin: {}, size: {}".format(trtr_score, self.init_trtr_score, dcf_score, self.init_dcf_score, self.invliad_bbox_cnt, margin, [width, height]))
-
+                #print("boundary!!! max score of trtr heatmap: {} / {}, max score of dcf heatmap: {} / {}, count: {}, margin: {}, size: {}".format(trtr_score, self.init_trtr_score, dcf_score, self.init_dcf_score, self.invalid_bbox_cnt, margin, [width, height]))
 
                 #if trtr_score < 0.1:
                 if dcf_score < self.boundary_target_score_threshold * self.init_dcf_score and trtr_score < self.boundary_target_score_threshold * self.init_trtr_score:
-                    self.invliad_bbox_score_cnt += 1
+                    self.invalid_bbox_score_cnt += 1
                 else:
                     # reset
-                    self.invliad_bbox_score_cnt = 0
+                    self.invalid_bbox_score_cnt = 0
 
-            if self.invliad_bbox_score_cnt > self.invliad_bbox_score_cnt_max:
+            if self.invalid_bbox_score_cnt > self.invalid_bbox_score_cnt_max:
                 self.recovery_flag = True
 
             if self.recovery_flag:
@@ -788,10 +790,10 @@ class Tracker():
                 self.target_sz = self.init_target_sz
                 self.target_pos = torch.Tensor([img_shape[0]/2, img_shape[1]/2]) # center of image
 
-                print("reset the tracker becuase of bbox near boundary. max_heatmap score from trtr: {}, count: {}".format(torch.max(heatmap), self.invliad_bbox_cnt))
+                print("reset the tracker becuase of bbox near boundary. max_heatmap score from trtr: {}, count: {}".format(torch.max(heatmap), self.invalid_bbox_cnt))
 
-                self.invliad_bbox_cnt = 0
-                self.invliad_bbox_score_cnt = 0
+                self.invalid_bbox_cnt = 0
+                self.invalid_bbox_score_cnt = 0
 
                 return {
                     'bbox': bbox,
@@ -800,7 +802,7 @@ class Tracker():
                     'resized_dcf_heatmap': resized_dcf_heatmap,
                 }
         else:
-            self.invliad_bbox_cnt = 0
+            self.invalid_bbox_cnt = 0
 
         bbox = self._bbox_clip(bbox, img_shape)
 
