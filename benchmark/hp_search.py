@@ -91,10 +91,13 @@ def main(args, hpnames):
             model_name += name + "_" + str(val).replace('.', 'p')
             if idx < len(hparam_set) - 1:
                 model_name += '_'
-
+                
         if not args.use_baseline_tracker:
             model_name += '_false_positive' # workaround to distinguish with old model name
 
+        if args.transformer_mask:
+            model_name += '_with_transformer_mask'
+            
         #print(model_name)
         model_dir = os.path.join(dataset_path, model_name)
         if not os.path.isdir(model_dir):
