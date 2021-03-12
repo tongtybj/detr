@@ -115,8 +115,8 @@ class Tracker():
         self.defualt_window_factor = window_factor
 
         # recovery
-        self.recovery_score_low_threshold = 0.2
-        self.recovery_score_high_threshold = 0.6
+        self.recovery_score_low_threshold = 0.0
+        self.recovery_score_high_threshold = 0.0
 
     def init(self, image, bbox):
 
