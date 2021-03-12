@@ -83,11 +83,11 @@ class Tracker():
         self.invliad_bbox_cnt_max = 5 # parameter
         self.invliad_bbox_score_cnt_max = 1 # parameter
         self.boundary_margin = 0.01 # parameter: pixel? (300 -> 3)
-        self.invliad_bbox_score_thresh = 0.1 # parameter
+        self.boundary_target_score_threshold = 0.2 # parameter
         self.relax_size_margin = 0.05
         self.hard_size_margin = 0.01 # parameter: pixel? (300 -> 6)
         self.boundary_recovery = boundary_recovery
-        self.boundary_flag = False
+        self.recovery_flag = False
 
         self.lost_target_recovery = lost_target_recovery
         self.lost_target_margin = lost_target_margin
@@ -114,6 +114,10 @@ class Tracker():
         self.expand_search_size = 500  # max for backbone of resnet50
         self.defualt_window_factor = window_factor
 
+        # recovery
+        self.recovery_score_low_threshold = 0.2
+        self.recovery_score_high_threshold = 0.6
+
     def init(self, image, bbox):
 
         # Get position and size
@@ -125,7 +129,7 @@ class Tracker():
         self.init_target_pos = self.target_pos
         self.target_sz = torch.Tensor([bbox[3], bbox[2]]) # real size in pixel
 
-        # For restart 
+        # For restart
         self.search_size = self.default_search_size
         self.window_factor = self.defualt_window_factor # heuristic
         stride = self.model.backbone.stride
@@ -160,6 +164,9 @@ class Tracker():
 
         self.init_target_sz = self.target_sz
         self.init_s_x = s_x
+
+        # reset recovery
+        self.recovery_flag = False
 
         # dcf initialize
         self.dcf_frame_num = 1
@@ -337,7 +344,7 @@ class Tracker():
         s_z, scale_z = siamfc_like_scale(prev_bbox_xyxy)
         s_x = self.search_size / scale_z
 
-        if self.boundary_flag:
+        if self.recovery_flag:
             # use
             s_x = np.max([np.min([np.max(image.shape[:2]) / 2, np.min(image.shape[:2])]), self.init_s_x])
             scale_z = self.search_size / s_x
@@ -390,11 +397,11 @@ class Tracker():
             dcf_heatmap = torch.clamp(s[0], min = 0)
             dcf_max_score = torch.max(dcf_heatmap).item()
 
-        if self.boundary_flag:
+        if self.recovery_flag:
             flag = 'recovery'
 
         # use the last result as template image
-        if flag == 'hard_negative' and self.hard_negative_recovery and not self.boundary_flag:
+        if flag == 'hard_negative' and self.hard_negative_recovery and not self.recovery_flag:
             template_image, _ = crop_image(self.prev_image, prev_bbox_xyxy, padding = self.prev_channel_avg)
 
             # get mask
@@ -422,13 +429,13 @@ class Tracker():
 
 
         # Combine with TrTr tracking framework
-        out = self.combine(image.shape[:2], prev_pos[[1,0]], prev_sz[[1,0]], scale_z, outputs, search_image, flag, dcf_heatmap)
+        out = self.combine(image.shape[:2], prev_pos[[1,0]], prev_sz[[1,0]], scale_z, outputs, search_image, flag, dcf_heatmap = dcf_heatmap, test_x = test_x)
 
         # ------- check lost target -----#
         # we check the static target (position is almost constant) with the close range to the boundary
         # the threshould contain translation, static cnt, the score with init template
-        if self.lost_target_recovery and not self.boundary_flag:
-            #print('trtr score: {}; bbox_in_search_image: {}, dcf_map: {}'.format(out['trtr_score'], out['bbox_in_search_image'].numpy(), dcf_heatmap.shape))
+        if self.lost_target_recovery and not self.recovery_flag:
+            # print('trtr score: {}; bbox_in_search_image: {}, dcf_map: {}'.format(out['trtr_score'], out['bbox_in_search_image'].numpy(), dcf_heatmap.shape))
 
             # TODO: also cosider the size of the bbox, and the change of the size
             if self.last_valid_position is not None:
@@ -450,6 +457,7 @@ class Tracker():
             if self.lost_target_cnt > self.lost_target_cnt_threshold:
 
                 dcf_heatmap = self.dcf_localize_target(operation.conv2d(test_x, self.init_dcf_filter, mode='same'))[1][0]
+                # TODO: should be a region of bounding box for both dcf_heatmap and trtr_heatmap, not the center point or the max score.
                 dcf_score = dcf_heatmap[0][self.search_size //2][self.search_size //2]
                 #print("check the score for the static target, trtr score: {} / {}, posititon in search image{}, dcf score: {} / {}, ".format(out['trtr_score'], self.init_trtr_score, out['bbox_in_search_image'], dcf_score, self.init_dcf_score))
 
@@ -475,12 +483,12 @@ class Tracker():
 
                     self.last_valid_position = None
                     self.lost_target_cnt = 0
-                    self.boundary_flag = True # TODO: change to other name
+                    self.recovery_flag = True # TODO: change to other name
 
 
 
         # heuristic solution:
-        # if fst target motion is found in the first tracking frame, we expand the search size
+        # if first target motion is found in the first tracking frame, we expand the search size
         if self.dcf_frame_num == 2:
             bbox_ct = out['bbox_in_search_image']
             delta = (bbox_ct - self.search_size / 2).abs().max().item()
@@ -527,7 +535,7 @@ class Tracker():
 
         else:
             # Check flags and set learning rate if hard negative
-            update_flag = flag not in ['not_found', 'uncertain']
+            update_flag = flag not in ['not_found', 'uncertain', 'recovery']
             hard_negative = (flag == 'hard_negative')
             learning_rate = self.dcf_params.hard_negative_learning_rate if hard_negative else None
 
@@ -564,21 +572,21 @@ class Tracker():
 
         if out['resized_dcf_heatmap'] is not None:
             dcf_heatmap = out['resized_dcf_heatmap']
-            heatmap = cv2.resize(dcf_heatmap / len(self.dcf_layers), search_image.shape[1::-1])
-            heatmap_h = heatmap * (30 - 127) * 1.2  + 127
+            heatmap = cv2.resize(dcf_heatmap, search_image.shape[1::-1])
+            heatmap_h = np.clip(heatmap * (30 - 127) * 2.0 + 127, 0, 127)
             heatmap_sv = np.full(search_image.shape[1::-1], 255, dtype=np.uint8)
             heatmap_hsv = np.stack([heatmap_h.astype(np.uint8), heatmap_sv, heatmap_sv], -1)
             out['dcf_heatmap'] = cv2.cvtColor(heatmap_hsv, cv2.COLOR_HSV2BGR)
 
         return out
 
-    def combine(self, img_shape, prev_pos, prev_sz, scale_z, trtr_outputs, search_image, dcf_flag, dcf_heatmap = None):
+    def combine(self, img_shape, prev_pos, prev_sz, scale_z, trtr_outputs, search_image, dcf_flag, dcf_heatmap = None, test_x = None):
 
         if dcf_heatmap is not None:
             trtr_dcf_scale = 1.0
             resized_bbox = torch.cat([(1 - trtr_dcf_scale) * self.dcf_img_sample_sz / 2, (1 + trtr_dcf_scale) * self.dcf_img_sample_sz / 2])
             resized_dcf_heatmap =  crop_hwc(dcf_heatmap.permute(1,2,0).detach().cpu().numpy(), resized_bbox, self.heatmap_size)
-            unroll_resized_dcf_heatmap = torch.tensor(resized_dcf_heatmap).view(self.heatmap_size * self.heatmap_size) / len(self.dcf_layers)
+            unroll_resized_dcf_heatmap = torch.tensor(resized_dcf_heatmap).view(self.heatmap_size * self.heatmap_size)
             best_idx = torch.argmax(unroll_resized_dcf_heatmap)
             # print("the peak {} in dcf heatmap: {}".format(torch.max(unroll_resized_dcf_heatmap), [best_idx % self.heatmap_size, best_idx // self.heatmap_size]))
         else:
@@ -660,7 +668,7 @@ class Tracker():
             if window_factor == 0:
                 post_heatmap = penalty * heatmap
 
-        #print("trtr best score: ", best_score, "; dcf best score: ", torch.max(unroll_resized_dcf_heatmap))
+        # print("trtr best score: ", best_score, "; dcf best score: ", torch.max(unroll_resized_dcf_heatmap))
 
         trtr_heatmap = post_heatmap
         if dcf_heatmap is not None:
@@ -684,7 +692,7 @@ class Tracker():
 
         # smooth bbox
         lpf = min(best_score * self.size_lpf, 1)
-        if self.boundary_flag:
+        if self.recovery_flag:
             lpf = 0.5 # heuristic
 
         bbox_wh = bbox_wh / scale_z
@@ -695,39 +703,74 @@ class Tracker():
         bbox = [cx - width / 2, cy - height / 2,
                 cx + width / 2, cy + height / 2]
 
-        self.boundary_flag = False
+        if self.recovery_flag:
+            max_dcf_score = torch.max(dcf_heatmap)
+            max_trtr_score = torch.max(heatmap)
+
+            if (max_trtr_score > self.init_trtr_score * self.recovery_score_low_threshold and max_dcf_score > self.init_dcf_score * self.recovery_score_low_threshold ) or max_trtr_score > self.init_trtr_score * self.recovery_score_high_threshold or max_dcf_score > self.init_dcf_score * self.recovery_score_high_threshold:
+                self.recovery_flag = False
+                print("recovery!!  max score of trtr heatmap: {} / {}, max score of dcf heatmap: {} / {}".format(max_trtr_score, self.init_trtr_score, max_dcf_score, self.init_dcf_score))
+            else:
+                self.target_sz = self.init_target_sz
+                self.target_pos = torch.Tensor([img_shape[0]/2, img_shape[1]/2]) # center of image
+                #print("not recovery!!  max score of trtr heatmap: {} / {}, max score of dcf heatmap: {} / {}".format(max_trtr_score, self.init_trtr_score, max_dcf_score, self.init_dcf_score))
+
+                return {
+                    'bbox': bbox,
+                    'score': best_score,
+                    'search_image': search_image,
+                    'resized_dcf_heatmap': resized_dcf_heatmap,
+                }
+
+
+        # check boundary issue
         margin = np.array(img_shape) * self.boundary_margin
         if bbox[0] <= margin[1] or bbox[1] < margin[0] or bbox[2] > img_shape[1]-1 - margin[1] or bbox[3] > img_shape[0]-1 - margin[0]:
+
             if self.boundary_recovery:
                 self.invliad_bbox_cnt += 1
-            #print("boundary!!! max_heatmap score from trtr: {}, count: {}, margin: {}, size: {}".format(torch.max(heatmap), self.invliad_bbox_cnt, margin, [width, height]))
 
-            # too small bbox
-            if self.boundary_recovery:
+                # too small bbox, instant recovery
                 if bbox[0] <= margin[1] or bbox[2] > img_shape[1]-1 - margin[1]:
                     if width <= self.hard_size_margin * img_shape[1]:
-                        self.boundary_flag = True
+                        self.recovery_flag = True
                 if bbox[1] <= margin[0] or bbox[3] > img_shape[0]-1 - margin[0]:
                     if height <= self.hard_size_margin * img_shape[0]:
-                        self.boundary_flag = True
+                        self.recovery_flag = True
                 if width <= self.relax_size_margin * img_shape[1] and height <= self.relax_size_margin * img_shape[0]:
-                    self.boundary_flag = True
+                    self.recovery_flag = True
             else:
+                # too small bbox, instant recovery
                 if width <= self.hard_size_margin * img_shape[1] and height <= self.hard_size_margin * img_shape[0]:
-                    self.boundary_flag = True
+                    self.recovery_flag = True
 
             if self.invliad_bbox_cnt > self.invliad_bbox_cnt_max:
 
-                if torch.max(heatmap) < self.invliad_bbox_score_thresh:
+                dcf_heatmap = self.dcf_localize_target(operation.conv2d(test_x, self.init_dcf_filter, mode='same'))[1][0]
+                check_region = torch.tensor([self.search_size //2 - int(height * scale_z / 2),
+                                             self.search_size //2 - int(width * scale_z / 2),
+                                             self.search_size //2 + int(height * scale_z / 2),
+                                             self.search_size //2 + int(width * scale_z / 2)])
+                dcf_score = torch.max(dcf_heatmap[0][check_region[1]:check_region[3],check_region[0]:check_region[2]])
+
+                check_region = check_region.float() * self.heatmap_size / self.search_size
+                check_region = check_region.int()
+                trtr_score = torch.max(heatmap.view(self.heatmap_size, self.heatmap_size)[check_region[1]:check_region[3],check_region[0]:check_region[2]])
+
+                #print("boundary!!! max score of trtr heatmap: {} / {}, max score of dcf heatmap: {} / {}, count: {}, margin: {}, size: {}".format(trtr_score, self.init_trtr_score, dcf_score, self.init_dcf_score, self.invliad_bbox_cnt, margin, [width, height]))
+
+
+                #if trtr_score < 0.1:
+                if dcf_score < self.boundary_target_score_threshold * self.init_dcf_score and trtr_score < self.boundary_target_score_threshold * self.init_trtr_score:
                     self.invliad_bbox_score_cnt += 1
                 else:
                     # reset
                     self.invliad_bbox_score_cnt = 0
 
             if self.invliad_bbox_score_cnt > self.invliad_bbox_score_cnt_max:
-                self.boundary_flag = True
+                self.recovery_flag = True
 
-            if self.boundary_flag:
+            if self.recovery_flag:
                 # reset the dcf optimizer
                 self.dcf_filter_optimizer.residuals = self.init_dcf_filter_optimizer_residuals
                 self.dcf_filter_optimizer.losses = self.init_dcf_filter_optimizer_losses
@@ -753,6 +796,8 @@ class Tracker():
                 return {
                     'bbox': bbox,
                     'score': best_score,
+                    'search_image': search_image,
+                    'resized_dcf_heatmap': resized_dcf_heatmap,
                 }
         else:
             self.invliad_bbox_cnt = 0
@@ -773,7 +818,7 @@ class Tracker():
         post_heatmap = (torch.round(post_heatmap * 255)).detach().numpy().astype(np.uint8)
         heatmap_resize = cv2.resize(raw_heatmap, search_image.shape[1::-1])
 
-        heatmap_h = heatmap_resize / -255 * (127 - 30) * 2  + 127
+        heatmap_h = np.clip(heatmap_resize / -255 * (127 - 30) * 2  + 127, 0, 127)
         heatmap_sv = np.full(search_image.shape[1::-1], 255, dtype=np.uint8)
         heatmap_hsv = np.stack([heatmap_h.astype(np.uint8), heatmap_sv, heatmap_sv], -1)
         heatmap_color = cv2.cvtColor(heatmap_hsv, cv2.COLOR_HSV2BGR)
@@ -826,6 +871,8 @@ class Tracker():
         scores = torch.cat([scores[...,(sz[0]+1)//2:,:], scores[...,:(sz[0]+1)//2,:]], -2)
         scores = torch.cat([scores[...,:,(sz[1]+1)//2:], scores[...,:,:(sz[1]+1)//2]], -1)
 
+        # Get the average heatmap
+        scores /= len(self.dcf_layers)
 
         # Find maximum
         max_score1, max_disp1 = dcf.max2d(scores)
