@@ -89,6 +89,8 @@ def main(args):
 
             if k == 27:         # wait for ESC key to exit
                 exit()
+            if k == ord("s"):
+                break
             if k == ord("m"):
                 # mark this video
                 save_file = os.path.join(result_path, 'marked_videos.txt')
