@@ -747,13 +747,14 @@ class Tracker():
                 if width <= self.hard_size_margin * img_shape[1] and height <= self.hard_size_margin * img_shape[0]:
                     self.recovery_flag = True
 
-            if self.invalid_bbox_cnt > self.invalid_bbox_cnt_max:
+            if self.invalid_bbox_cnt > self.invalid_bbox_cnt_max and not self.recovery_flag:
 
                 dcf_heatmap = self.dcf_localize_target(operation.conv2d(test_x, self.init_dcf_filter, mode='same'))[1][0]
                 check_region = torch.tensor([self.search_size //2 - int(height * scale_z / 2),
                                              self.search_size //2 - int(width * scale_z / 2),
                                              self.search_size //2 + int(height * scale_z / 2),
                                              self.search_size //2 + int(width * scale_z / 2)])
+
                 dcf_score = torch.max(dcf_heatmap[0][check_region[1]:check_region[3],check_region[0]:check_region[2]])
 
                 check_region = check_region.float() * self.heatmap_size / self.search_size
@@ -769,8 +770,8 @@ class Tracker():
                     # reset
                     self.invalid_bbox_score_cnt = 0
 
-            if self.invalid_bbox_score_cnt > self.invalid_bbox_score_cnt_max:
-                self.recovery_flag = True
+                if self.invalid_bbox_score_cnt > self.invalid_bbox_score_cnt_max:
+                    self.recovery_flag = True
 
             if self.recovery_flag:
                 # reset the dcf optimizer
