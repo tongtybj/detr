@@ -339,7 +339,6 @@ class Tracker():
         # ------- online heatmap and localization ------- #
         prev_pos = self.target_pos
         prev_sz = self.target_sz
-        channel_avg = np.mean(image, axis=(0, 1))
 
         prev_bbox_xyxy = [prev_pos[1] - prev_sz[1] / 2,
                           prev_pos[0] - prev_sz[0] / 2,
@@ -347,6 +346,10 @@ class Tracker():
                           prev_pos[0] + prev_sz[0] / 2]
         s_z, scale_z = siamfc_like_scale(prev_bbox_xyxy)
         s_x = self.search_size / scale_z
+
+        channel_avg = [0, 0, 0]
+        if prev_pos[0] - s_x/2 <  1 or prev_pos[1] - s_x/2 <  1 or prev_pos[1] + s_x/2 > image.shape[1] - 1 or prev_pos[0] + s_x/2 > image.shape[0] - 1:
+            channel_avg = [np.mean(image[:,:,0]), np.mean(image[:,:,1]), np.mean(image[:,:,2])] # much faster than np.mean and also fater than np.enisum
 
         if self.recovery_flag:
             # use
@@ -359,7 +362,7 @@ class Tracker():
             _, search_image = crop_image(image, prev_bbox_xyxy, padding = channel_avg, instance_size = self.search_size)
 
         # get mask
-        search_mask = [0, 0, search_image.shape[1], search_image.shape[0]]
+        search_mask = [0, 0, self.search_size, self.search_size]
         if prev_pos[1] < s_x/2:
             search_mask[0] = (s_x/2 - prev_pos[1]) * scale_z
         if prev_pos[0] < s_x/2:

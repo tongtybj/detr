@@ -123,12 +123,12 @@ class Tracker(object):
                      self.center_pos[1] - self.size[1] / 2,
                      self.center_pos[0] + self.size[0] / 2,
                      self.center_pos[1] + self.size[1] / 2]
-        channel_avg = np.mean(img, axis=(0, 1)) # TODO: no need?
-        _, search_image = crop_image(img, bbox_xyxy, padding = channel_avg, instance_size = self.search_size)
+
         s_z, scale_z = siamfc_like_scale(bbox_xyxy)
         s_x = self.search_size / scale_z
         # get mask
-        search_mask = [0, 0, search_image.shape[0], search_image.shape[1]]
+        search_mask = [0, 0, self.search_size, self.search_size]
+
         if self.center_pos[0] < s_x/2:
             search_mask[0] = (s_x/2 - self.center_pos[0]) * scale_z
         if self.center_pos[1] < s_x/2:
@@ -137,6 +137,11 @@ class Tracker(object):
             search_mask[2] = search_mask[2] - (self.center_pos[0] + s_x/2 - img.shape[1]) * scale_z
         if self.center_pos[1] + s_x/2 > img.shape[0]:
             search_mask[3] = search_mask[3] - (self.center_pos[1] + s_x/2 - img.shape[0]) * scale_z
+
+        channel_avg = [0, 0, 0]
+        if self.center_pos[0] - s_x/2 < 1 or self.center_pos[1] - s_x/2 < 1 or self.center_pos[0] + s_x/2 > img.shape[1] - 1 or self.center_pos[1] + s_x/2 > img.shape[0] - 1:
+            channel_avg = [np.mean(img[:,:,0]), np.mean(img[:,:,1]), np.mean(img[:,:,2])] # much faster than np.mean and also fater than np.enisum
+        _, search_image = crop_image(img, bbox_xyxy, padding = channel_avg, instance_size = self.search_size)
 
         # normalize and conver to torch.tensor
         search = self.image_normalize(np.round(search_image).astype(np.uint8)).cuda()
