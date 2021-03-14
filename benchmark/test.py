@@ -165,6 +165,8 @@ def main(args, tracker):
                 frame_counter = 0
                 lost_number = 0
                 toc = 0
+                init_toc = 0
+                valid_frames = 0
                 pred_bboxes = []
 
                 template_image = None
@@ -183,8 +185,10 @@ def main(args, tracker):
                         cx, cy, w, h = get_axis_aligned_bbox(np.array(gt_bbox))
                         gt_bbox_ = [cx - w/2, cy - h/2, w, h]
                         tracker.init(img, gt_bbox_)
+                        init_toc += cv2.getTickCount() - tic
                         pred_bbox = gt_bbox_
                         pred_bboxes.append(1)
+
                     elif idx > frame_counter:
                         outputs = tracker.track(img)
                         pred_bbox = outputs['bbox']
@@ -192,7 +196,11 @@ def main(args, tracker):
                                      pred_bbox[2] - pred_bbox[0],
                                      pred_bbox[3] - pred_bbox[1]]
 
+                        valid_frames += 1
+                        toc += cv2.getTickCount() - tic
+
                         overlap = vot_overlap(pred_bbox, gt_bbox, (img.shape[1], img.shape[0]))
+
                         if overlap > 0:
                             # not lost
                             pred_bboxes.append(pred_bbox)
@@ -224,7 +232,6 @@ def main(args, tracker):
 
                     else:
                         pred_bboxes.append(0)
-                    toc += cv2.getTickCount() - tic
                     if idx == 0:
                         if args.vis:
                             cv2.destroyAllWindows()
@@ -256,6 +263,7 @@ def main(args, tracker):
                     sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
 
                 toc /= cv2.getTickFrequency()
+                init_toc /= cv2.getTickFrequency()
                 # save results
                 video_path = os.path.join(args.result_path, args.dataset, model_name,
                         'baseline', video.name)
@@ -269,7 +277,7 @@ def main(args, tracker):
                         else:
                             f.write(','.join([vot_float2str("%.4f", i) for i in x])+'\n')
                 log = '({:3d}) Video ({:2d}): {:12s} Time: {:4.1f}s Speed: {:3.1f}fps Lost: {:d}'.format(
-                        v_idx+1, cnt+1, video.name, toc, idx / toc, lost_number)
+                        v_idx+1, cnt+1, video.name, init_toc + toc, valid_frames / toc, lost_number)
                 print(log)
                 with open(os.path.join(args.result_path, args.dataset, model_name, 'log.txt'), 'a') as f:
                     f.write(log + '\n')
@@ -308,6 +316,7 @@ def main(args, tracker):
             min_lost_number = 1e6
             for cnt in range(args.repetition):
                 toc = 0
+                init_toc = 0
                 pred_bboxes = []
                 track_times = []
                 template_image = None
@@ -330,17 +339,18 @@ def main(args, tracker):
                     tic = cv2.getTickCount()
                     if idx == 0:
                         outputs = tracker.init(img, gt_bbox)
+                        init_toc += cv2.getTickCount() - tic
                         pred_bbox = gt_bbox
                         pred_bboxes.append(pred_bbox)
                     else:
                         outputs = tracker.track(img)
+                        toc += cv2.getTickCount() - tic
                         pred_bbox_ = outputs['bbox']
                         pred_bbox = [pred_bbox_[0], pred_bbox_[1],
                                      pred_bbox_[2] - pred_bbox_[0],
                                      pred_bbox_[3] - pred_bbox_[1]]
                         pred_bboxes.append(pred_bbox)
 
-                    toc += cv2.getTickCount() - tic
                     track_times.append((cv2.getTickCount() - tic)/cv2.getTickFrequency())
 
                     gt_bbox_int = list(map(lambda x: int(x) if not np.isnan(x) else 0, gt_bbox))
@@ -413,6 +423,7 @@ def main(args, tracker):
                     min_lost_number = lost_number
 
                 toc /= cv2.getTickFrequency()
+                init_toc /= cv2.getTickFrequency()
                 # save results
                 if 'GOT-10k' == args.dataset:
                     video_path = os.path.join(args.result_path, args.dataset, model_name, video.name)
@@ -439,8 +450,8 @@ def main(args, tracker):
                         for x in pred_bboxes:
                             f.write(','.join([vot_float2str("%.4f", i) for i in x])+'\n')
 
-                log = '({:3d}) Video: {:12s} Trail: {:2d}  Time: {:5.1f}s Speed: {:3.1f}fps Lost: {:d}/{:d} Repetition: {:d}'.format(
-                    v_idx+1, video.name, cnt+1, toc, idx / toc, lost_number, len(video), cnt)
+                log = '({:3d}) Video: {:12s} Trail: {:2d}  Time: {:5.1f}s Speed: {:3.1f}fps Lost: {:d}/{:d}'.format(
+                    v_idx+1, video.name, cnt+1, init_toc + toc, idx / toc, lost_number, len(video))
                 print(log)
                 with open(os.path.join(args.result_path, args.dataset, model_name, 'log.txt'), 'a') as f:
                     f.write(log + '\n')
