@@ -402,7 +402,6 @@ class Tracker():
             scores_raw = self.dcf_apply_filter(test_x)
             translation_vec, s, flag = self.dcf_localize_target(scores_raw)
             dcf_heatmap = torch.clamp(s[0], min = 0)
-            dcf_max_score = torch.max(dcf_heatmap).item()
 
         if self.recovery_flag:
             flag = 'recovery'
@@ -464,6 +463,7 @@ class Tracker():
             if self.lost_target_cnt > self.lost_target_cnt_threshold:
 
                 dcf_heatmap = self.dcf_localize_target(operation.conv2d(test_x, self.init_dcf_filter, mode='same'))[1][0]
+                dcf_heatmap /= len(self.dcf_layers)
                 # TODO: should be a region of bounding box for both dcf_heatmap and trtr_heatmap, not the center point or the max score.
                 dcf_score = dcf_heatmap[0][self.search_size //2][self.search_size //2]
                 #print("check the score for the static target, trtr score: {} / {}, posititon in search image{}, dcf score: {} / {}, ".format(out['trtr_score'], self.init_trtr_score, out['bbox_in_search_image'], dcf_score, self.init_dcf_score))
@@ -529,17 +529,6 @@ class Tracker():
                 # do initialize training for online DCF
                 print("do initialize for DCF")
                 self.dcf_init()
-
-                ## debug
-                sample_pos = self.target_pos.round()
-                test_x = self.dcf_project_sample(self.dcf_feature_preprocess(all_features))
-
-                # Compute scores
-                scores_raw = self.dcf_apply_filter(test_x)
-                translation_vec, s, flag = self.dcf_localize_target(scores_raw)
-                dcf_heatmap = torch.clamp(s[0], min = 0)
-                dcf_max_score = torch.max(dcf_heatmap).item()
-
         else:
             # Check flags and set learning rate if hard negative
             update_flag = flag not in ['not_found', 'uncertain', 'recovery']
@@ -592,7 +581,9 @@ class Tracker():
         if dcf_heatmap is not None:
             trtr_dcf_scale = 1.0
             resized_bbox = torch.cat([(1 - trtr_dcf_scale) * self.dcf_img_sample_sz / 2, (1 + trtr_dcf_scale) * self.dcf_img_sample_sz / 2])
+            # TODO, should not use crop_hwc, please use FFT in fourier.sum_fs
             resized_dcf_heatmap =  crop_hwc(dcf_heatmap.permute(1,2,0).detach().cpu().numpy(), resized_bbox, self.heatmap_size)
+            resized_dcf_heatmap /= len(self.dcf_layers)
             unroll_resized_dcf_heatmap = torch.tensor(resized_dcf_heatmap).view(self.heatmap_size * self.heatmap_size)
             best_idx = torch.argmax(unroll_resized_dcf_heatmap)
             # print("the peak {} in dcf heatmap: {}".format(torch.max(unroll_resized_dcf_heatmap), [best_idx % self.heatmap_size, best_idx // self.heatmap_size]))
@@ -753,6 +744,7 @@ class Tracker():
             if self.invalid_bbox_cnt > self.invalid_bbox_cnt_max and not self.recovery_flag:
 
                 dcf_heatmap = self.dcf_localize_target(operation.conv2d(test_x, self.init_dcf_filter, mode='same'))[1][0]
+                dcf_heatmap /= len(self.dcf_layers)
                 check_region = torch.tensor([self.search_size //2 - int(height * scale_z / 2),
                                              self.search_size //2 - int(width * scale_z / 2),
                                              self.search_size //2 + int(height * scale_z / 2),
@@ -878,7 +870,7 @@ class Tracker():
         scores = torch.cat([scores[...,:,(sz[1]+1)//2:], scores[...,:,:(sz[1]+1)//2]], -1)
 
         # Get the average heatmap
-        scores /= len(self.dcf_layers)
+        # scores /= len(self.dcf_layers) // should be here, but, we have a special resize process in self.combine: crop_hwc (actually, this function is not good)
 
         # Find maximum
         max_score1, max_disp1 = dcf.max2d(scores)
