@@ -22,14 +22,14 @@ def get_args_parser():
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
 
+    parser.add_argument('--video_name', default="", type=str)
+
     # * Backbone
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
-    parser.add_argument('--resnet_dilation', action='store_false',
-                        help="If true (default), we replace stride with dilation in resnet blocks") #default is true
     parser.add_argument('--backbone', default='resnet50', type=str,
                         help="Name of the convolutional backbone to use")
-    parser.add_argument('--dilation', action='store_false',
-                        help="If true, we replace stride with dilation in the last convolutional block (DC5)") #defualt is true
+    parser.add_argument('--resnet_dilation', action='store_false',
+                        help="If true (default), we replace stride with dilation in resnet blocks") #default is true
     parser.add_argument('--return_interm_layers', action='store_true')
     parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
                         help="Type of positional embedding to use on top of the image features")
@@ -51,12 +51,15 @@ def get_args_parser():
                         help="Number of query slots")
     parser.add_argument('--pre_norm', action='store_true')
     parser.add_argument('--return_layers', default=[], nargs='+')
+    parser.add_argument('--dcf_layers', default=[], nargs='+')
     parser.add_argument('--weighted', action='store_true',
                         help="the weighted for the multiple input embedding for transformer")
-    parser.add_argument('--transformer_mask', action='store_false',
-                        help="mask for transformer") # workaround to enable transformer mask for defanult
+    parser.add_argument('--transformer_mask', action='store_true',
+                        help="mask for transformer")
     parser.add_argument('--multi_frame', action='store_true',
                         help="use multi frame for encoder (template images)")
+    parser.add_argument('--repetition', default=1, type=int)
+    parser.add_argument('--min_lost_rate_for_repeat', default=0.1, type=float) # change for different benchmark
 
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
@@ -64,15 +67,14 @@ def get_args_parser():
     parser.add_argument('--loss_mask', action='store_true',
                         help="mask for heamtmap loss")
 
+
     # * Loss coefficients
     parser.add_argument('--reg_loss_coef', default=1, type=float,
                         help="weight (coeffficient) about bbox offset reggresion loss")
     parser.add_argument('--wh_loss_coef', default=1, type=float,
                         help="weight (coeffficient) about bbox width/height loss")
 
-
     # tracking
-    parser.add_argument('--video_name', default="", type=str)
     parser.add_argument('--checkpoint', default="", type=str)
     parser.add_argument('--exemplar_size', default=127, type=int)
     parser.add_argument('--search_size', default=255, type=int)
@@ -80,7 +82,7 @@ def get_args_parser():
     parser.add_argument('--use_baseline_tracker', action='store_true')
 
     # * hyper-parameter for tracking
-    parser.add_argument('--score_threshold', default=0.1, type=float,
+    parser.add_argument('--score_threshold', default=0.05, type=float,
                         help='the lower score threshold to recognize a target (score_target > threshold) ')
     parser.add_argument('--window_steps', default=3, type=int,
                         help='the pyramid factor to gradually reduce the widow effect')
@@ -88,10 +90,27 @@ def get_args_parser():
                         help='the factor of the hanning window for heatmap post process')
     parser.add_argument('--tracking_size_penalty_k', default=0.04, type=float,
                         help='the factor to penalize the change of size')
-    parser.add_argument('--tracking_size_lpf', default=0.33, type=float,
+    parser.add_argument('--tracking_size_lpf', default=0.8, type=float,
                         help='the factor of the lpf for size tracking')
+    parser.add_argument('--dcf_rate', default=0.8, type=float,
+                        help='the weight for integrate dcf and trtr for heatmap ')
+    parser.add_argument('--dcf_sample_memory_size', default=250, type=int,
+                        help='the size of the trainining sample for DCF ')
 
-    parser.add_argument('--external_tracker', default="", type=str)
+    parser.add_argument('--dcf_size', default=0, type=int,
+                        help='the size for feature for dcf')
+    parser.add_argument('--boundary_recovery', action='store_true',
+                        help='whether use boundary recovery')
+    parser.add_argument('--hard_negative_recovery', action='store_true',
+                        help='whether use hard negative recovery')
+    parser.add_argument('--lost_target_recovery', action='store_true',
+                        help='whether use lost target recovery')
+    parser.add_argument('--lost_target_margin', default=0.3, type=float)
+    parser.add_argument('--translation_threshold', default=0.03, type=float)
+    parser.add_argument('--lost_target_cnt_threshold', default=60, type=int)
+    parser.add_argument('--lost_target_score_threshold', default=0.5, type=float)
+
+    parser.add_argument('--debug', action='store_true', help='wheterh visualize the debug result')
 
     return parser
 
@@ -129,10 +148,8 @@ def get_frames(video_name):
             yield frame
 
 
-def main(args):
+def main(args, tracker):
 
-    # create tracker
-    tracker = build_tracker(args)
 
     first_frame = True
     if args.video_name:
@@ -157,18 +174,21 @@ def main(args):
         output = tracker.track(frame)
 
         bbox = np.round(output["bbox"]).astype(np.uint16)
-        print("the tracking score: {}, box: {}".format(output["score"], bbox))
+
         cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]),
                       (0, 255, 0), 3)
         cv2.imshow("result", frame)
 
-        debug_images = ["template_image", "search_image", "raw_heatmap", "post_heatmap"]
-        for image in debug_images:
-            if image in output:
-                cv2.imshow(image, output[image])
+        wait = 1
+        if args.debug:
+            wait = 0
+            for key, value in output.items():
+                if isinstance(value, np.ndarray):
+                    if len(value.shape) == 3 or len(value.shape) == 2:
+                        cv2.imshow(key, value)
 
-        k = cv2.waitKey(0)
-        #k = cv2.waitKey(40)
+        k = cv2.waitKey(wait)
+
         if k == 27:         # wait for ESC key to exit
             sys.exit()
 
@@ -176,4 +196,12 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
-    main(args)
+
+    # create tracker
+    if args.use_baseline_tracker:
+        tracker = build_baseline_tracker(args)
+    else:
+        tracker = build_online_tracker(args)
+
+    main(args, tracker)
+
