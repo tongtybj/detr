@@ -1,21 +1,16 @@
 # Prepare for VOT benchmark
 
-## Create directory for dataset
-
-```shell
-mkdir dataset
-```
-
-or 
+## Create symbolic link for dataset  (Option, but recommended)
 
 ````shell
 ln -sfb $PWD/dataset ./dataset
 ````
+**note**: suppose you have sufficient space under `$PWD/dataset`
 
 ## Download and unzip dataset
 
 ````shell
-./download_unpack.sh # 2018 (default)
-./download_unpack.sh 2020 shortterm # 2020
+./install.sh       # 2018 (default)
+./install.sh 2020  # 2020
 ````
 
