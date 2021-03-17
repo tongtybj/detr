@@ -1,19 +1,16 @@
-# Copyright (c) SenseTime. All Rights Reserved.
-
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-import argparse
-import os
-
-import sys
 import cv2
 import copy
-import torch
-import numpy as np
 from glob import glob
+from jsonargparse import ArgumentParser, ActionParser
+import numpy as np
+import os
+import sys
+import torch
 
 sys.path.append('..')
 from util.box_ops import get_axis_aligned_bbox
@@ -27,29 +24,41 @@ from models.hybrid_tracker import get_args_parser as tracker_args_parser
 
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('benchmark dataset inference', add_help=False, parents=[tracker_args_parser()])
+    parser = ArgumentParser(prog='benchmark dataset inference')
 
     # tracking
-    parser.add_argument('--use_baseline_tracker', action='store_true')
+    parser.add_argument('--use_baseline_tracker', action='store_true',
+                        help='whether use baseline(offline) tracker')
+    parser.add_argument('--external_tracker', type=str, default='',
+                        choices=('', 'atom', 'dimp', 'prdimp'),
+                        help='if not empty, the external tracker will be used')
+
+    parser.add_argument('--dataset_path', type=str, default='',
+                        help='path of datasets')
+    parser.add_argument('--dataset', type=str, default='VOT2018',
+                        choices=('VOT2018', 'VOT2019', 'VOT2020', 'OTB', 'UAV', 'NFS', 'TrackingNet', 'LaSOT', 'GOT-10k'),
+                        help='the name of benchmark')
+    parser.add_argument('--video', type=str, default='',
+                        help='eval one special video')
+    parser.add_argument('--vis', action='store_true',
+                        help='whether visualzie result')
+    parser.add_argument('--debug_vis', action='store_true',
+                        help='whether visualize the debug result')
+    parser.add_argument('--model_name', type=str, default='trtr',
+                        help='the name of tracker')
+
+    parser.add_argument('--result_path', type=str, default='results',
+                        help='the path to store trackingresults')
+
+    parser.add_argument('--save_image_num_per_video', type=int, default=1,
+                        help='save the tracking result as image, please choose value larger than 1, or 0 for saving every frame')
 
     parser.add_argument('--repetition', default=1, type=int)
     parser.add_argument('--min_lost_rate_for_repeat', default=0.1, type=float) # change for different benchmark
 
-    parser.add_argument('--dataset_path', default="", type=str, help='path of datasets')
-    parser.add_argument('--dataset', type=str, help='the benchmark', default="VOT2018")
-    parser.add_argument('--video', default='', type=str, help='eval one special video')
-    parser.add_argument('--vis', action='store_true', help='whether visualzie result')
-    parser.add_argument('--debug_vis', action='store_true', help='wheterh visualize the debug result')
-    parser.add_argument('--model_name', default='trtr', type=str)
-
-    parser.add_argument('--result_path', default='results', type=str)
-    parser.add_argument('--external_tracker', default="", type=str)
-
-    parser.add_argument('--save_image_num_per_video', default=1, type=int)
-
+    parser.add_argument('--tracker', action=ActionParser(parser=tracker_args_parser()))
 
     return parser
-
 
 def main(args, tracker):
 
@@ -376,15 +385,15 @@ def main(args, tracker):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('Benchmark dataset inference', parents=[get_args_parser()])
+    parser = get_args_parser()
     args = parser.parse_args()
 
     # create tracker
     if args.use_baseline_tracker:
-        tracker = build_baseline_tracker(args)
+        tracker = build_baseline_tracker(args.tracker)
     elif args.external_tracker:
         tracker = build_external_tracker(args)
     else:
-        tracker = build_online_tracker(args)
+        tracker = build_online_tracker(args.tracker)
 
     main(args, tracker)

@@ -1,8 +1,10 @@
 """
 TrTr model and criterion classes.
 """
-import argparse
+
 import copy
+from jsonargparse import ArgumentParser, ActionParser
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -12,6 +14,7 @@ from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        reg_l1_loss, neg_loss,
                        get_world_size, is_dist_avail_and_initialized)
 
+from .position_encoding import build_position_encoding
 from .backbone import build_backbone
 from .backbone import get_args_parser as backbone_args_parser
 from .transformer import build_transformer
@@ -303,34 +306,51 @@ class MLP(nn.Module):
         return x
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('trtr', add_help=False, parents=[backbone_args_parser(), transformer_args_parser()])
+    parser = ArgumentParser(prog = 'trtr')
 
     parser.add_argument('--device', default='cuda',
-                        help='device to use for training / testing')
+                        help='device to use for inference')
 
-    # Parameters
-    parser.add_argument('--transformer_mask', action='store_true',
-                        help="masking padding area to zero in attention mechanism")
+    # Modle Parameters
+    parser.add_argument('--transformer_mask', type=bool, default=False,
+                        help="whether masking padding area to zero in attention mechanism")
 
     # Loss
-    parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
-                        help="Disables auxiliary decoding losses (loss at each layer)")
-    parser.add_argument('--loss_mask', action='store_true',
-                        help="mask for heamtmap loss")
+    parser.add_argument('--aux_loss', type=bool, default=True,
+                        help="whether use auxiliary decoding losses (loss at each layer)")
+    parser.add_argument('--loss_mask', type=bool, default=False,
+                        help="whether use mask for heamtmap loss")
 
-    parser.add_argument('--reg_loss_coef', default=1, type=float,
+    parser.add_argument('--reg_loss_coef', type=float, default=1,
                         help="weight (coeffficient) about bbox offset reggresion loss")
-    parser.add_argument('--wh_loss_coef', default=1, type=float,
+    parser.add_argument('--wh_loss_coef', type=float, default=1,
                         help="weight (coeffficient) about bbox width/height loss")
 
+
+    # Backbone
+    parser.add_argument('--backbone', action=ActionParser(parser=backbone_args_parser()))
+    # Position Embedding
+    parser.add_argument('--position_embedding', type=str, default='sine', choices=('sine', 'learned'),
+                        help="Type of positional embedding to use on top of the image features")
+    # Transformer
+    parser.add_argument('--transformer', action=ActionParser(parser=transformer_args_parser()))
 
     return parser
 
 
 def build(args):
     device = torch.device(args.device)
-    backbone = build_backbone(args)
-    transformer = build_transformer(args)
+
+    position_embedding = build_position_encoding(args)
+
+    print("backbone arg: ", args)
+    if hasattr(args, 'train_backbone'):
+        train_backbone = args.train_backbone
+    else:
+        train_backbone = False
+
+    backbone = build_backbone(args.backbone, position_embedding, train = train_backbone)
+    transformer = build_transformer(args.transformer)
 
     print("start build model")
     model = TRTR(
@@ -344,7 +364,7 @@ def build(args):
 
     if args.aux_loss:
         aux_weight_dict = {}
-        for i in range(args.dec_layers - 1):
+        for i in range(args.transformer.dec_layers - 1):
             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
         weight_dict.update(aux_weight_dict)
 

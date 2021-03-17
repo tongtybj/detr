@@ -3,8 +3,8 @@
 Backbone modules.
 """
 from collections import OrderedDict
+from jsonargparse import ArgumentParser
 
-import argparse
 import torch
 import torch.nn.functional as F
 import torchvision
@@ -13,19 +13,16 @@ from torchvision.models._utils import IntermediateLayerGetter
 from typing import Dict, List
 from util.misc import NestedTensor, is_main_process
 
-from .position_encoding import build_position_encoding
-
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('backbone', add_help=False)
+    parser = ArgumentParser(prog='backbone')
 
-    parser.add_argument('--backbone', default='resnet50', type=str,
+    parser.add_argument('--model', type=str, default='resnet50',
                         help="Name of the convolutional backbone to use")
-    parser.add_argument('--no_dilation', action='store_true',
-                        help="ResNet conv dilation: we replace stride with dilation in resnet blocks.")
-    parser.add_argument('--return_layers', default=[], nargs='+')
-    parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
-                        help="Type of positional embedding to use on top of the image features")
+    parser.add_argument('--dilation', type=bool, default=True,
+                        help="whether replace stride with dilation in ResNet blocks.")
+    parser.add_argument('--return_layers', default=[], nargs='+',
+                        help="layers to return from the backbone. Can be multiple layers to do layer-wise aggregation")
 
     return parser
 
@@ -170,21 +167,13 @@ class Joiner(nn.Sequential):
 
         return out, pos, extra_out
 
-def build_backbone(args):
-    position_embedding = build_position_encoding(args)
-
-    if hasattr(args, 'lr_backbone'):
-        train_backbone = args.lr_backbone > 0
-    else:
-        train_backbone = False
-
-    dilation = not args.no_dilation
+def build_backbone(args, position_embedding, train = False):
 
     if len(args.return_layers) == 0:
-        if 'resnet' in args.backbone:
+        if 'resnet' in args.model:
             args.return_layers = ['layer3']
 
-    backbone = Backbone(args.backbone, train_backbone, args.return_layers, dilation)
+    backbone = Backbone(args.model, train, args.return_layers, args.dilation)
     model = Joiner(backbone, position_embedding)
     model.num_channels_list = backbone.num_channels_list
     return model

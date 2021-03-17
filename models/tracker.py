@@ -1,41 +1,42 @@
-# Copyright (c) SenseTime. All Rights Reserved.
-
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-import argparse
+import cv2
+from jsonargparse import ArgumentParser, ActionParser
 import numpy as np
+import time
+
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as T
+
 import datasets.utils
 from datasets.utils import crop_image, siamfc_like_scale, get_exemplar_size, get_context_amount # TODO: move to utils
 from util.box_ops import box_cxcywh_to_xyxy
 from util.misc import is_dist_avail_and_initialized, nested_tensor_from_tensor_list
-import cv2
-import time
 from models import build_model
 from .trtr import get_args_parser as trtr_args_parser
 
 class Tracker(object):
-    def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf, multi_frame):
+    def __init__(self, model, postprocess, search_size, postprocess_params):
+
         self.model = model
         self.model.eval()
         self.postprocess = postprocess
 
         self.search_size = search_size
         backbone_stride = model.backbone.stride
-        self.heatmap_size = (search_size + backbone_stride - 1) // backbone_stride
-        self.size_lpf = size_lpf
-        self.size_penalty_k = size_penalty_k
+        self.heatmap_size = (self.search_size + backbone_stride - 1) // backbone_stride
+        self.size_lpf = postprocess_params.tracking_size_lpf
+        self.size_penalty_k = postprocess_params.tracking_size_penalty_k
 
         hanning = np.hanning(self.heatmap_size)
         self.window = torch.as_tensor(np.outer(hanning, hanning).flatten())
-        self.window_factor = window_factor
-        self.score_threshold = score_threshold
-        self.window_steps = window_steps
+        self.window_factor = postprocess_params.window_factor
+        self.score_threshold = postprocess_params.score_threshold
+        self.window_steps = postprocess_params.window_steps
 
         self.init_bbox_size = []
 
@@ -45,7 +46,7 @@ class Tracker(object):
         ])
         self.first_frame = False
 
-        self.multi_frame = multi_frame
+        self.multi_frame = postprocess_params.multi_frame
         self.prev_img = None
         self.rect_template_image = None
         self.prev_rect_template_image = None
@@ -325,25 +326,30 @@ class Tracker(object):
 
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('baseline tracker', add_help=False, parents=[trtr_args_parser()])
+    parser = ArgumentParser(prog='baseline tracker')
 
-    parser.add_argument('--checkpoint', default="", type=str)
-    parser.add_argument('--exemplar_size', default=127, type=int)
-    parser.add_argument('--search_size', default=255, type=int)
-    parser.add_argument('--context_amount', default=0.5, type=float)
+    parser.add_argument('--checkpoint', type=str, default="",
+                        help="checkpoint model for inference")
+    parser.add_argument('--search_size', type=int, default=255,
+                        help="size of the template image")
 
-    parser.add_argument('--score_threshold', default=0.05, type=float,
-                        help='the lower score threshold to recognize a target (score_target > threshold) ')
-    parser.add_argument('--window_steps', default=3, type=int,
-                        help='the pyramid factor to gradually reduce the widow effect')
-    parser.add_argument('--window_factor', default=0.4, type=float,
-                        help='the factor of the hanning window for heatmap post process')
-    parser.add_argument('--tracking_size_penalty_k', default=0.04, type=float,
-                        help='the factor to penalize the change of size')
-    parser.add_argument('--tracking_size_lpf', default=0.8, type=float,
-                        help='the factor of the lpf for size tracking')
-    parser.add_argument('--multi_frame', action='store_true',
-                        help="use multi frame for encoder (template images)")
+    postprocess_parser = ArgumentParser(prog='post process')
+    postprocess_parser.add_argument('--score_threshold', type=float, default=0.05,
+                                    help='the lower score threshold to identify a target (score_target > threshold) ')
+    postprocess_parser.add_argument('--window_steps', type=int, default=3,
+                                    help='the pyramid factor to gradually reduce the widow effect')
+    postprocess_parser.add_argument('--window_factor', type=float, default=0.4,
+                                    help='the factor of the hanning window for heatmap post process')
+    postprocess_parser.add_argument('--tracking_size_penalty_k', type=float, default=0.04,
+                                    help='the factor to penalize the change of size')
+    postprocess_parser.add_argument('--tracking_size_lpf', type=float, default=0.8,
+                                    help='the factor of the lpf for size tracking')
+    postprocess_parser.add_argument('--multi_frame', type=bool, default=False,
+                                    help="(Deprecated) use multi frame for encoder (template images)")
+    parser.add_argument('--postprocess', action=ActionParser(parser=postprocess_parser))
+
+    # TrTr
+    parser.add_argument('--model', action=ActionParser(parser=trtr_args_parser()))
 
     return parser
 
@@ -354,11 +360,14 @@ def build_tracker(args, model = None, postprocessors = None):
     device = torch.device('cuda')
 
     if model is None or postprocessors is None:
-        model, _, postprocessors = build_model(args)
+        model, _, postprocessors = build_model(args.model)
 
         checkpoint = torch.load(args.checkpoint, map_location='cpu')
         assert 'model' in checkpoint
         model.load_state_dict(checkpoint['model'])
         model.to(device)
 
-    return Tracker(model, postprocessors["bbox"], args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.multi_frame)
+    return Tracker(model,
+                   postprocessors["bbox"],
+                   args.search_size,
+                   args.postprocess)

@@ -1,6 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-import argparse
 import datetime
+from jsonargparse import ArgumentParser, ActionParser
 import json
 import random
 import time
@@ -26,25 +26,31 @@ from models.tracker import get_args_parser as tracker_args_parser
 
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('tracking evaluation', add_help=False, parents=[trtr_args_parser(), dataset_args_parser()])
+    parser = ArgumentParser('training')
 
     # training
+    parser.add_argument('--device', default='cuda',
+                        help='device to use for inference')
+
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
-    parser.add_argument('--resume', default='', help='resume from checkpoint')
+    parser.add_argument('--resume', default='',
+                        help='resume from checkpoint')
 
     parser.add_argument('--seed', default=42, type=int)
-    parser.add_argument('--lr', default=1e-4, type=float)
-    parser.add_argument('--lr_backbone', default=1e-5, type=float)
     parser.add_argument('--batch_size', default=2, type=int)
-    parser.add_argument('--weight_decay', default=1e-4, type=float)
     parser.add_argument('--epochs', default=50, type=int)
+    parser.add_argument('--lr', default=1e-4, type=float,
+                        help='learning rate for network excluding backbone')
+    parser.add_argument('--lr_backbone', default=1e-5, type=float,
+                        help='learning rate for backbone, 0 to freeze backbone')
+
+    parser.add_argument('--weight_decay', default=1e-4, type=float)
     parser.add_argument('--lr_drop', default=6, type=int)
     parser.add_argument('--lr_gamma', default=0.5, type=float)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
-    parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
-                        help='start epoch')
+    parser.add_argument('--start_epoch', default=0, type=int, metavar='N')
 
     # dataset
     parser.add_argument('--num_workers', default=2, type=int)
@@ -60,6 +66,13 @@ def get_args_parser():
                         help='step to test benchmark')
     parser.add_argument('--benchmark_start_epoch', default=0, type=int,
                         help='epoch to start benchmark')
+
+    # Dataset
+    parser.add_argument('--dataset', action=ActionParser(parser=dataset_args_parser()))
+
+    # TrTr
+    parser.add_argument('--model', action=ActionParser(parser=trtr_args_parser()))
+
 
     return parser
 
@@ -77,7 +90,10 @@ def main(args):
     np.random.seed(seed)
     random.seed(seed)
 
-    model, criterion, postprocessors = build_model(args)
+    # special process to control whether freeze backbone
+    args.model.train_backbone = args.lr_backbone > 0
+
+    model, criterion, postprocessors = build_model(args.model)
     model.to(device)
 
     model_without_ddp = model
@@ -98,8 +114,8 @@ def main(args):
                                   weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop, gamma = args.lr_gamma)
 
-    dataset_train = build_dataset(image_set='train', args=args, model = model)
-    dataset_val = build_dataset(image_set='val', args=args, model = model)
+    dataset_train = build_dataset(image_set='train', args=args.dataset, model_stride = model.backbone.stride)
+    dataset_val = build_dataset(image_set='val', args=args.dataset, model_stride = model.backbone.stride)
 
     if args.distributed:
         sampler_train = DistributedSampler(dataset_train)
@@ -130,13 +146,15 @@ def main(args):
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
             args.start_epoch = checkpoint['epoch'] + 1
 
-    benchmark_test_parser = argparse.ArgumentParser('benchmark dataset inference', parents=[benchmark_test.get_args_parser(), get_args_parser()],conflict_handler='resolve')
-    benchmark_test_args = benchmark_test_parser.parse_args()
+
+    benchmark_test_parser = benchmark_test.get_args_parser()
+    benchmark_test_args = benchmark_test_parser.get_defaults()
+    benchmark_test_args.tracker.model = args.model # overwrite the parameters about network model
     benchmark_test_args.result_path = Path(os.path.join(args.output_dir, 'benchmark'))
     benchmark_test_args.dataset_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'benchmark')
 
-    benchmark_eval_parser = argparse.ArgumentParser('benchmark dataset evaluation', parents=[benchmark_eval.get_args_parser(), get_args_parser()],conflict_handler='resolve')
-    benchmark_eval_args = benchmark_eval_parser.parse_args()
+    benchmark_eval_parser = benchmark_eval.get_args_parser()
+    benchmark_eval_args = benchmark_eval_parser.get_defaults()
     benchmark_eval_args.tracker_path = benchmark_test_args.result_path
     best_eao = 0
     best_ar = [0, 10] # accuracy & robustness
@@ -187,7 +205,7 @@ def main(args):
         if utils.is_main_process():
             if (epoch + 1) % args.benchmark_test_step == 0 and epoch > args.benchmark_start_epoch:
 
-                tracker = build_tracker(benchmark_test_args, model = model_without_ddp, postprocessors = postprocessors)
+                tracker = build_tracker(benchmark_test_args.tracker, model = model_without_ddp, postprocessors = postprocessors)
                 benchmark_test_args.model_name = "epoch" + str(epoch)
                 benchmark_start_time = time.time()
                 benchmark_test.main(benchmark_test_args, tracker)
@@ -198,7 +216,7 @@ def main(args):
                 eval_results = benchmark_eval.main(benchmark_eval_args)
                 eval_result = list(eval_results.values())[0]
 
-                if benchmark_test_args.dataset == ['VOT2018', 'VOT2019']:
+                if benchmark_test_args.dataset in ['VOT2018', 'VOT2019']:
                     if args.output_dir:
                         with (output_dir / str("benchmark_" +  benchmark_test_args.dataset + ".txt")).open("a") as f:
                             f.write("epoch: " + str(epoch) + ", best EAO: " + str(best_eao) + ", " + json.dumps(eval_result) +  "\n")
@@ -236,7 +254,7 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
+    parser = get_args_parser()
     args = parser.parse_args()
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)

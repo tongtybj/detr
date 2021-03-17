@@ -74,6 +74,11 @@ pip install colorama
 
 echo ""
 echo ""
+echo "****************** Installing jsonargparse ******************"
+pip install jsonargparse jsonschema
+
+echo ""
+echo ""
 echo "****************** Downloading networks ******************"
 mkdir networks
 

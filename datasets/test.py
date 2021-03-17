@@ -1,5 +1,10 @@
+'''
+usage:
 
-import argparse
+$ python test.py --paths ./yt_bb/dataset/Curation ./vid/dataset/Curation/ --video_frame_ranges 100 3 --num_uses 20 20
+'''
+
+from jsonargparse import ArgumentParser
 import datetime
 import json
 import random
@@ -13,6 +18,7 @@ import torch
 from torch.utils.data import DataLoader, DistributedSampler
 
 from dataset import build as build_dataset
+from dataset import get_args_parser as dataset_args_parser
 
 sys.path.append('..')
 import util.misc as utils
@@ -22,42 +28,18 @@ import cv2
 import torchvision.transforms as T
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('Test VID  dataset ', add_help=False)
-
-    parser.add_argument('--batch_size', default=2, type=int)
-    parser.add_argument('--epoch', default=1, type=int)
-
-    # dataset parameters
-    parser.add_argument('--dataset_paths', default=[], nargs='+') # the path to datasets
-
-    parser.add_argument('--dataset_video_frame_ranges', default=[100], nargs='+')
-    parser.add_argument('--dataset_num_uses', default=[-1], nargs='+')
-    parser.add_argument('--template_aug_shift', default=4, type=int)
-    parser.add_argument('--template_aug_scale', default=0.05, type=float)
-    parser.add_argument('--template_aug_color', default=1.0, type=float)
-    parser.add_argument('--search_aug_shift', default=64, type=int)
-    parser.add_argument('--search_aug_scale', default=0.18, type=float)
-    parser.add_argument('--search_aug_blur', default=0.2, type=float)
-    parser.add_argument('--search_aug_color', default=1.0, type=float)
-    parser.add_argument('--exempler_size', default=127, type=int)
-    parser.add_argument('--search_size', default=255, type=int)
-    parser.add_argument('--resnet_dilation', action='store_false',
-                        help="If true, we replace stride with dilation in the last convolutional block (DC5)") #defualt is true
-    parser.add_argument('--negative_aug_rate', default=0.2, type=float)
+    parser = dataset_args_parser()
 
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
     parser.add_argument('--seed', default=42, type=int)
-    parser.add_argument('--resume', default='', help='resume from checkpoint')
-    parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
-                        help='start epoch')
-    parser.add_argument('--eval', action='store_true')
+    parser.add_argument('--batch_size', default=2, type=int)
+    parser.add_argument('--epoch', default=1, type=int)
+
     parser.add_argument('--num_workers', default=2, type=int)
 
-    # distributed training parameters
-    parser.add_argument('--world_size', default=1, type=int,
-                        help='number of distributed processes')
-    parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+    parser.add_argument('--model_stride', default=8, type=int) # debug
+
     return parser
 
 
@@ -71,8 +53,8 @@ def main(args):
     np.random.seed(seed)
     random.seed(seed)
 
-    dataset_train = build_dataset(image_set='train', args=args)
-    dataset_val = build_dataset(image_set='val', args=args)
+    dataset_train = build_dataset(image_set='train', args=args, model_stride = args.model_stride)
+    dataset_val = build_dataset(image_set='val', args=args, model_stride = args.model_stride)
 
     sampler_train = torch.utils.data.RandomSampler(dataset_train)
     sampler_val = torch.utils.data.SequentialSampler(dataset_val)
@@ -134,7 +116,8 @@ def main(args):
                 # draw the orginal ground truth bbox
                 orig_bbox = torch.round(targets[batch_i]["bbox_debug"].to('cpu')).int()
                 cv2.rectangle(search_image, (orig_bbox[0], orig_bbox[1]), (orig_bbox[2], orig_bbox[3]), (0,255,0))
-                cv2.circle(search_image, (np.round(revert_ct[0]), np.round(revert_ct[1])), 2, (0,255,0), -1) # no need
+                revert_ct  = np.round(revert_ct.numpy()).astype(np.int)
+                cv2.circle(search_image, (revert_ct[0], revert_ct[1]), 2, (0,255,0), -1) # no need
 
                 # draw the mask
                 template_mask = torch.round(obj[2][batch_i].to('cpu')).int()
@@ -172,6 +155,6 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
+    parser = get_args_parser()
     args = parser.parse_args()
     main(args)

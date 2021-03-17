@@ -3,27 +3,31 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-import os
-import argparse
-
-import sys
 import cv2
-import torch
-import numpy as np
 from glob import glob
+from jsonargparse import ArgumentParser, ActionParser
+import numpy as np
+import os
+import sys
+import torch
+
 from models.tracker import build_tracker as build_baseline_tracker
 from models.hybrid_tracker import build_tracker as build_online_tracker
 from models.hybrid_tracker import get_args_parser as tracker_args_parser
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('demo', add_help=False, parents=[tracker_args_parser()])
+    parser = ArgumentParser(prog='demo')
 
-    parser.add_argument('--use_baseline_tracker', action='store_true')
-    parser.add_argument('--video_name', default="", type=str)
-    parser.add_argument('--debug', action='store_true', help='wheterh visualize the debug result')
+    parser.add_argument('--use_baseline_tracker', action='store_true',
+                        help='whether use baseline(offline) tracker')
+    parser.add_argument('--video_name', default='', type=str,
+                        help='empty to use webcam, otherwise *.mp4, *.avi, *jpg, *JPEG, or *.png are allowed')
+    parser.add_argument('--debug', action='store_true',
+                        help='whether visualize the debug result')
+
+    parser.add_argument('--tracker', action=ActionParser(parser=tracker_args_parser()))
 
     return parser
-
 
 def get_frames(video_name):
     if not video_name:
@@ -105,14 +109,16 @@ def main(args, tracker):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
+    parser = get_args_parser()
     args = parser.parse_args()
+
+    print(args)
 
     # create tracker
     if args.use_baseline_tracker:
-        tracker = build_baseline_tracker(args)
+        tracker = build_baseline_tracker(args.tracker)
     else:
-        tracker = build_online_tracker(args)
+        tracker = build_online_tracker(args.tracker)
 
     main(args, tracker)
 

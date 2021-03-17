@@ -1,10 +1,10 @@
-import argparse
 import math
 import time
 import importlib
 import sys
 import os
 import cv2
+from jsonargparse import ArgumentParser, ActionParser
 import numpy as np
 import copy
 
@@ -33,11 +33,10 @@ from pytracking.tracker.atom.optim import ConvProblem, FactorizedConvProblem
 
 class Tracker():
 
-    def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf, dcf_size, dcf_layers, dcf_rate, dcf_sample_memory_size, boundary_recovery, hard_negative_recovery, lost_target_recovery, lost_target_margin, translation_threshold, lost_target_score_threshold, lost_target_cnt_threshold):
+    def __init__(self, model, postprocess, search_size, dcf_params, postprocess_params):
 
         dcf_param_module = importlib.import_module('pytracking.parameter.atom.default_vot')
         self.dcf_params = dcf_param_module.parameters()
-
 
         # TrTr model
         self.model = model
@@ -46,26 +45,29 @@ class Tracker():
 
         self.search_size = search_size
         backbone_stride = model.backbone.stride
-        self.heatmap_size = (search_size + backbone_stride - 1) // backbone_stride
-        self.size_lpf = size_lpf
-        self.size_penalty_k = size_penalty_k
-        self.dcf_rate =  dcf_rate
+        self.heatmap_size = (self.search_size + backbone_stride - 1) // backbone_stride
+        self.size_lpf = postprocess_params.tracking_size_lpf
+        self.size_penalty_k = postprocess_params.tracking_size_penalty_k
+
 
         hanning = np.hanning(self.heatmap_size)
         self.window = torch.as_tensor(np.outer(hanning, hanning).flatten())
-        self.window_factor = window_factor
-        self.score_threshold = score_threshold
-        self.window_steps = window_steps
+        self.window_factor = postprocess_params.window_factor
+        self.score_threshold = postprocess_params.score_threshold
+        self.window_steps = postprocess_params.window_steps
         self.image_normalize = T.Compose([
             T.ToTensor(), # Converts a numpy.ndarray (H x W x C) in the range [0, 255] to a torch.FloatTensor of shape (C x H x W) in the range [0.0, 1.0]
             T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ])
         self.first_frame = False
 
-        # Get feature specific params
-        self.dcf_fparams = TensorList(self.dcf_params.features.get_fparams('feature_params').list() * len(dcf_layers))
+        # Online DCF
+        self.dcf_layers = dcf_params.layers
+        self.dcf_rate =  dcf_params.rate
+        self.dcf_feature_sz = dcf_params.size
+        self.dcf_fparams = TensorList(self.dcf_params.features.get_fparams('feature_params').list() * len(self.dcf_layers))
         self.dcf_params.train_skipping = 10 # TODO: tuning 10 - 20 (vot-toolkit)
-        self.dcf_params.sample_memory_size  = dcf_sample_memory_size
+        self.dcf_params.sample_memory_size  = dcf_params.sample_memory_size
 
         # smaller augmentation with more init samples
         self.init_training_frame_num = 1 # parameter => important factor
@@ -76,9 +78,7 @@ class Tracker():
                                             'relativeshift': [(0.6, 0.6), (-0.6, -0.6)],
                                             'dropout': (3, 0.2)}
 
-        self.dcf_feature_sz = dcf_size
 
-        self.dcf_layers = dcf_layers
 
         self.invalid_bbox_cnt = 0
         self.invalid_bbox_score_cnt = 0
@@ -88,18 +88,18 @@ class Tracker():
         self.boundary_target_score_threshold = 0.2 # parameter
         self.relax_size_margin = 0.05
         self.hard_size_margin = 0.01 # parameter: pixel? (300 -> 6)
-        self.boundary_recovery = boundary_recovery
+        self.boundary_recovery = postprocess_params.boundary_recovery
         self.recovery_flag = False
 
-        self.lost_target_recovery = lost_target_recovery
-        self.lost_target_margin = lost_target_margin
-        self.translation_threshold = translation_threshold
-        self.lost_target_score_threshold = lost_target_score_threshold
-        self.lost_target_cnt_threshold = lost_target_cnt_threshold
+        self.lost_target_recovery = postprocess_params.lost_target_recovery
+        self.lost_target_margin = postprocess_params.lost_target.boundary_margin
+        self.translation_threshold = postprocess_params.lost_target.translation_threshold
+        self.lost_target_score_threshold = postprocess_params.lost_target.score_threshold
+        self.lost_target_cnt_threshold = postprocess_params.lost_target.cnt_threshold
         self.last_valid_position = None
         self.lost_target_cnt = 0
 
-        self.hard_negative_recovery = hard_negative_recovery
+        self.hard_negative_recovery = postprocess_params.hard_negative_recovery
 
         # false positive
         self.max_false_postive = 3
@@ -114,7 +114,7 @@ class Tracker():
         self.max_translation = get_exemplar_size() / 2  # heuristic paramter to detect fast motion: half of exemplar_size (i.e., 127)
         self.default_search_size = search_size # max for backbone of resnet50
         self.expand_search_size = 500  # max for backbone of resnet50
-        self.defualt_window_factor = window_factor
+        self.defualt_window_factor = self.window_factor
 
         # recovery
         self.recovery_score_low_threshold = 0.0
@@ -1169,27 +1169,42 @@ class Tracker():
         return TensorList(dcf_features)
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('baseline tracker', add_help=False, parents=[baseline_tracker_args_parser()])
+    # Inherit from Baseline Tracker
+    parser = baseline_tracker_args_parser()
 
     # * hyper-parameter for tracking
-    parser.add_argument('--dcf_layers', default=[], nargs='+')
-    parser.add_argument('--dcf_rate', default=0.6, type=float,
+    dcf_parser = ArgumentParser(prog='online dcf')
+    dcf_parser.add_argument('--layers', default=[], nargs='+',
+                        help = 'layers of backbone used by dcf')
+    dcf_parser.add_argument('--rate', type=float, default=0.6,
                         help='the weight for integrate dcf and trtr for heatmap ')
-    parser.add_argument('--dcf_sample_memory_size', default=250, type=int,
-                        help='the size of the trainining sample for DCF ')
-
-    parser.add_argument('--dcf_size', default=0, type=int,
+    dcf_parser.add_argument('--size', type=int, default=0,
                         help='the size for feature for dcf')
-    parser.add_argument('--boundary_recovery', action='store_true',
-                        help='whether use boundary recovery')
-    parser.add_argument('--hard_negative_recovery', action='store_true',
-                        help='whether use hard negative recovery')
-    parser.add_argument('--lost_target_recovery', action='store_true',
-                        help='whether use lost target recovery')
-    parser.add_argument('--lost_target_margin', default=0.3, type=float)
-    parser.add_argument('--translation_threshold', default=0.03, type=float)
-    parser.add_argument('--lost_target_cnt_threshold', default=60, type=int)
-    parser.add_argument('--lost_target_score_threshold', default=0.5, type=float)
+    dcf_parser.add_argument('--sample_memory_size', type=int, default=250,
+                        help='the size of the trainining sample for DCF ')
+    parser.add_argument('--dcf', action=ActionParser(parser=dcf_parser))
+
+
+    # Post Process
+    parser.add_argument('--postprocess.boundary_recovery', type=bool, default=False,
+                                    help='whether use boundary recovery')
+    parser.add_argument('--postprocess.hard_negative_recovery', type=bool, default=False,
+                                    help='(Depracated) whether use hard negative recovery')
+    parser.add_argument('--postprocess.lost_target_recovery', type=bool, default=False,
+                                    help='whether use lost target recovery')
+
+    ## Lost Traget
+    lost_target_parser = ArgumentParser(prog='lost target')
+    lost_target_parser.add_argument('--boundary_margin', type=float, default=0.3,
+                                    help='the margin to the boundary of image')
+    lost_target_parser.add_argument('--translation_threshold', type=float, default=0.03,
+                                    help='the translation threshold to determine static tracking')
+    lost_target_parser.add_argument('--cnt_threshold', type=int, default=60,
+                                    help='the count threshold to determine static tracking')
+    lost_target_parser.add_argument('--score_threshold', type=float, default=0.5,
+                                    help='the score threshold to determine static tracking')
+    parser.add_argument('--postprocess.lost_target', action=ActionParser(parser=lost_target_parser))
+
 
     return parser
 
@@ -1200,33 +1215,18 @@ def build_tracker(args):
 
     device = torch.device('cuda')
 
-    #assert args.transformer_mask # should be True
-    model, _, postprocessors = build_model(args)
+    model, _, postprocessors = build_model(args.model)
 
     checkpoint = torch.load(args.checkpoint, map_location='cpu')
     assert 'model' in checkpoint
     model.load_state_dict(checkpoint['model'])
     model.to(device)
 
-    if len(args.dcf_layers) == 0:
-        args.dcf_layers = ['layer2', 'layer3']
+    if len(args.dcf.layers) == 0:
+        args.dcf.layers = ['layer2', 'layer3']
 
     return Tracker(model,
                    postprocessors["bbox"],
                    args.search_size,
-                   args.window_factor,
-                   args.score_threshold,
-                   args.window_steps,
-                   args.tracking_size_penalty_k,
-                   args.tracking_size_lpf,
-                   args.dcf_size,
-                   args.dcf_layers,
-                   args.dcf_rate,
-                   args.dcf_sample_memory_size,
-                   args.boundary_recovery,
-                   args.hard_negative_recovery,
-                   args.lost_target_recovery,
-                   args.lost_target_margin,
-                   args.translation_threshold,
-                   args.lost_target_score_threshold,
-                   args.lost_target_cnt_threshold)
+                   args.dcf,
+                   args.postprocess)

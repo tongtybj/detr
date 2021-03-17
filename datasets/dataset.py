@@ -1,18 +1,9 @@
-# Copyright (c) SenseTime. All Rights Reserved.
-
-'''
-usage:
-
-python test.py --dataset_paths ./yt_bb/youtube_bb/Curation ./vid/ILSVRC2015/Curation/ --dataset_video_frame_ranges 100 3 --dataset_num_uses 20 20
-
-'''
-
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-import argparse
+from jsonargparse import ArgumentParser, ActionParser
 from importlib import import_module
 import mimetypes
 import logging
@@ -171,20 +162,19 @@ class SubDataset(object):
 
 class TrkDataset(Dataset):
     def __init__(self,
-                 model, image_set, dataset_paths,
+                 image_set, dataset_paths,
                  dataset_video_frame_ranges, dataset_num_uses,
                  template_shift, template_scale, template_color,
                  search_shift, search_scale, search_blur, search_color,
                  exempler_size = 127, search_size = 255,
-                 negative_rate = 0.5):
+                 negative_rate = 0.5, model_stride = 1):
         super(TrkDataset, self).__init__()
 
         self.exempler_size = exempler_size
         self.search_size = search_size
         self.negative_rate = negative_rate
 
-        stride = model.backbone.stride
-        self.output_size = (self.search_size + stride - 1) // stride
+        self.output_size = (self.search_size + model_stride - 1) // model_stride
 
         # create sub dataset
         self.all_dataset = []
@@ -382,11 +372,17 @@ class TrkDataset(Dataset):
         return template, search, template_mask, search_mask, target_dict
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('dataset', add_help=False)
+    parser = ArgumentParser(prog = 'dataset')
 
-    parser.add_argument('--dataset_paths', default=[], nargs='+') # the path to datasets
-    parser.add_argument('--dataset_video_frame_ranges', default=[100], nargs='+')
-    parser.add_argument('--dataset_num_uses', default=[-1], nargs='+')
+    parser.add_argument('--paths', default=[], nargs='+',
+                        help = 'the paths to datasets')
+    parser.add_argument('--num_uses', default=[-1], nargs='+',
+                        help = 'the number of images to used for training in each dataset')
+    parser.add_argument('--eval_num_uses', default=[], nargs='+',
+                        help = 'the number of images to used for evaluation in each dataset')
+    parser.add_argument('--video_frame_ranges', default=[100], nargs='+',
+                        help = 'the frames interval in each dataset')
+
     parser.add_argument('--template_aug_shift', default=4, type=int)
     parser.add_argument('--template_aug_scale', default=0.05, type=float)
     parser.add_argument('--template_aug_color', default=1.0, type=float) # Pysot is 1.0
@@ -397,25 +393,23 @@ def get_args_parser():
     parser.add_argument('--exempler_size', default=127, type=int)
     parser.add_argument('--search_size', default=255, type=int)
     parser.add_argument('--negative_aug_rate', default=0.2, type=float)
-    parser.add_argument('--eval_dataset_num_uses', default=[], nargs='+')
 
     return parser
 
-def build(image_set, args, model):
+def build(image_set, args, model_stride):
 
-    assert len(args.dataset_paths) == len(args.dataset_video_frame_ranges) == len(args.dataset_num_uses)
+    assert len(args.paths) == len(args.video_frame_ranges) == len(args.num_uses)
 
     if image_set == 'val':
-        if len(args.dataset_num_uses) == len(args.eval_dataset_num_uses):
-            args.dataset_num_uses = args.eval_dataset_num_uses
+        if len(args.num_uses) == len(args.eval_num_uses):
+            args.num_uses = args.eval_num_uses
         else:
-            args.dataset_num_uses = [-1] * len(args.dataset_num_uses)
+            args.num_uses = [-1] * len(args.num_uses)
 
-    dataset = TrkDataset(model,
-                         image_set,
-                         args.dataset_paths,
-                         args.dataset_video_frame_ranges,
-                         args.dataset_num_uses,
+    dataset = TrkDataset(image_set,
+                         args.paths,
+                         args.video_frame_ranges,
+                         args.num_uses,
                          args.template_aug_shift,
                          args.template_aug_scale,
                          args.template_aug_color,
@@ -425,6 +419,6 @@ def build(image_set, args, model):
                          args.search_aug_color,
                          args.exempler_size,
                          args.search_size,
-                         args.negative_aug_rate
-                         )
+                         args.negative_aug_rate,
+                         model_stride)
     return dataset

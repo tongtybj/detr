@@ -4,7 +4,7 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import os
-import argparse
+from jsonargparse import ArgumentParser
 
 from glob import glob
 from tqdm import tqdm
@@ -16,11 +16,12 @@ from toolkit.datasets import OTBDataset, UAVDataset, LaSOTDataset, VOTDataset, N
 from toolkit.evaluation import OPEBenchmark, AccuracyRobustnessBenchmark, EAOBenchmark, F1Benchmark
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('benchmark dataset inference', add_help=False)
+    parser = ArgumentParser(prog='benchmark dataset evaluation')
     parser.add_argument('--tracker_path', '-p', type=str, default='results',
                         help='tracker result path')
     parser.add_argument('--dataset', '-d', type=str, default='VOT2018',
-                        help='dataset name')
+                        choices=('VOT2018', 'VOT2019', 'VOT2020', 'OTB', 'UAV', 'NFS', 'TrackingNet', 'LaSOT', 'GOT-10k'),
+                        help='the name of benchmark')
     parser.add_argument('--num', '-n', default=1, type=int,
                         help='number of thread to eval')
     parser.add_argument('--tracker_prefix', '-t', default='',
@@ -185,7 +186,7 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('Benchmark dataset inference', parents=[get_args_parser()])
+    parser = get_args_parser()
     args = parser.parse_args()
     main(args)
 
