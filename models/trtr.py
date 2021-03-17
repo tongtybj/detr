@@ -1,7 +1,7 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 """
-DETR model and criterion classes.
+TrTr model and criterion classes.
 """
+import argparse
 import copy
 import torch
 import torch.nn.functional as F
@@ -13,13 +13,15 @@ from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        get_world_size, is_dist_avail_and_initialized)
 
 from .backbone import build_backbone
+from .backbone import get_args_parser as backbone_args_parser
 from .transformer import build_transformer
+from .transformer import get_args_parser as transformer_args_parser
 
 import time
 import numpy as np
 
 class TRTR(nn.Module):
-    """ This is the DETR module that performs object detection """
+    """ This is the TRTR module that performs target tracking """
     def __init__(self, backbone, transformer, aux_loss=False, transformer_mask=False):
         """ Initializes the model.
         Parameters:
@@ -299,6 +301,30 @@ class MLP(nn.Module):
         for i, layer in enumerate(self.layers):
             x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
         return x
+
+def get_args_parser():
+    parser = argparse.ArgumentParser('trtr', add_help=False, parents=[backbone_args_parser(), transformer_args_parser()])
+
+    parser.add_argument('--device', default='cuda',
+                        help='device to use for training / testing')
+
+    # Parameters
+    parser.add_argument('--transformer_mask', action='store_true',
+                        help="masking padding area to zero in attention mechanism")
+
+    # Loss
+    parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
+                        help="Disables auxiliary decoding losses (loss at each layer)")
+    parser.add_argument('--loss_mask', action='store_true',
+                        help="mask for heamtmap loss")
+
+    parser.add_argument('--reg_loss_coef', default=1, type=float,
+                        help="weight (coeffficient) about bbox offset reggresion loss")
+    parser.add_argument('--wh_loss_coef', default=1, type=float,
+                        help="weight (coeffficient) about bbox width/height loss")
+
+
+    return parser
 
 
 def build(args):

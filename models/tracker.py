@@ -5,6 +5,7 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
+import argparse
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -16,6 +17,7 @@ from util.misc import is_dist_avail_and_initialized, nested_tensor_from_tensor_l
 import cv2
 import time
 from models import build_model
+from .trtr import get_args_parser as trtr_args_parser
 
 class Tracker(object):
     def __init__(self, model, postprocess, search_size, window_factor, score_threshold, window_steps, size_penalty_k, size_lpf, multi_frame):
@@ -320,6 +322,30 @@ class Tracker(object):
             'template_image': self.rect_template_image, # debug
             'prev_template_image': self.prev_rect_template_image # debug
         }
+
+
+def get_args_parser():
+    parser = argparse.ArgumentParser('baseline tracker', add_help=False, parents=[trtr_args_parser()])
+
+    parser.add_argument('--checkpoint', default="", type=str)
+    parser.add_argument('--exemplar_size', default=127, type=int)
+    parser.add_argument('--search_size', default=255, type=int)
+    parser.add_argument('--context_amount', default=0.5, type=float)
+
+    parser.add_argument('--score_threshold', default=0.05, type=float,
+                        help='the lower score threshold to recognize a target (score_target > threshold) ')
+    parser.add_argument('--window_steps', default=3, type=int,
+                        help='the pyramid factor to gradually reduce the widow effect')
+    parser.add_argument('--window_factor', default=0.4, type=float,
+                        help='the factor of the hanning window for heatmap post process')
+    parser.add_argument('--tracking_size_penalty_k', default=0.04, type=float,
+                        help='the factor to penalize the change of size')
+    parser.add_argument('--tracking_size_lpf', default=0.8, type=float,
+                        help='the factor of the lpf for size tracking')
+    parser.add_argument('--multi_frame', action='store_true',
+                        help="use multi frame for encoder (template images)")
+
+    return parser
 
 def build_tracker(args, model = None, postprocessors = None):
     if not torch.cuda.is_available():

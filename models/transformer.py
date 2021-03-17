@@ -7,6 +7,7 @@ Copy from DETR, whish has following modification compared to original transforme
     * extra LN at the end of encoder is removed
     * decoder returns a stack of activations from all decoding layers
 """
+import argparse
 import copy
 from typing import Optional, List
 
@@ -315,6 +316,28 @@ class TransformerDecoderLayer(nn.Module):
 
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
+
+def get_args_parser():
+    parser = argparse.ArgumentParser('transformer', add_help=False)
+
+    parser.add_argument('--enc_layers', default=1, type=int,
+                        help="Number of encoding layers in the transformer")
+    parser.add_argument('--dec_layers', default=1, type=int,
+                        help="Number of decoding layers in the transformer")
+    parser.add_argument('--dim_feedforward', default=2048, type=int,
+                        help="Intermediate size of the feedforward layers in the transformer blocks")
+    parser.add_argument('--hidden_dim', default=256, type=int,
+                        help="Size of the embeddings (dimension of the transformer)")
+    parser.add_argument('--dropout', default=0.0, type=float,
+                        help="Dropout applied in the transformer") # switch by eval() / train()
+    parser.add_argument('--nheads', default=8, type=int,
+                        help="Number of attention heads inside the transformer's attentions")
+    parser.add_argument('--num_queries', default=100, type=int,
+                        help="Number of query slots")
+    parser.add_argument('--pre_norm', action='store_true')
+
+
+    return parser
 
 
 def build_transformer(args):

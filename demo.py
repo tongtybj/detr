@@ -6,110 +6,20 @@ from __future__ import unicode_literals
 import os
 import argparse
 
+import sys
 import cv2
 import torch
 import numpy as np
 from glob import glob
 from models.tracker import build_tracker as build_baseline_tracker
 from models.hybrid_tracker import build_tracker as build_online_tracker
-
-torch.set_num_threads(1)
+from models.hybrid_tracker import get_args_parser as tracker_args_parser
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('Set transformer tracking', add_help=False)
+    parser = argparse.ArgumentParser('demo', add_help=False, parents=[tracker_args_parser()])
 
-    # Model parameters
-    parser.add_argument('--device', default='cuda',
-                        help='device to use for training / testing')
-
-    parser.add_argument('--video_name', default="", type=str)
-
-    # * Backbone
-    parser.add_argument('--lr_backbone', default=1e-5, type=float)
-    parser.add_argument('--backbone', default='resnet50', type=str,
-                        help="Name of the convolutional backbone to use")
-    parser.add_argument('--resnet_dilation', action='store_false',
-                        help="If true (default), we replace stride with dilation in resnet blocks") #default is true
-    parser.add_argument('--return_interm_layers', action='store_true')
-    parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
-                        help="Type of positional embedding to use on top of the image features")
-
-    # * Transformer
-    parser.add_argument('--enc_layers', default=1, type=int,
-                        help="Number of encoding layers in the transformer")
-    parser.add_argument('--dec_layers', default=1, type=int,
-                        help="Number of decoding layers in the transformer")
-    parser.add_argument('--dim_feedforward', default=2048, type=int,
-                        help="Intermediate size of the feedforward layers in the transformer blocks")
-    parser.add_argument('--hidden_dim', default=256, type=int,
-                        help="Size of the embeddings (dimension of the transformer)")
-    parser.add_argument('--dropout', default=0.0, type=float,
-                        help="Dropout applied in the transformer") # switch by eval() / train()
-    parser.add_argument('--nheads', default=8, type=int,
-                        help="Number of attention heads inside the transformer's attentions")
-    parser.add_argument('--num_queries', default=100, type=int,
-                        help="Number of query slots")
-    parser.add_argument('--pre_norm', action='store_true')
-    parser.add_argument('--return_layers', default=[], nargs='+')
-    parser.add_argument('--dcf_layers', default=[], nargs='+')
-    parser.add_argument('--weighted', action='store_true',
-                        help="the weighted for the multiple input embedding for transformer")
-    parser.add_argument('--transformer_mask', action='store_true',
-                        help="mask for transformer")
-    parser.add_argument('--multi_frame', action='store_true',
-                        help="use multi frame for encoder (template images)")
-    parser.add_argument('--repetition', default=1, type=int)
-    parser.add_argument('--min_lost_rate_for_repeat', default=0.1, type=float) # change for different benchmark
-
-    # Loss
-    parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
-                        help="Disables auxiliary decoding losses (loss at each layer)")
-    parser.add_argument('--loss_mask', action='store_true',
-                        help="mask for heamtmap loss")
-
-
-    # * Loss coefficients
-    parser.add_argument('--reg_loss_coef', default=1, type=float,
-                        help="weight (coeffficient) about bbox offset reggresion loss")
-    parser.add_argument('--wh_loss_coef', default=1, type=float,
-                        help="weight (coeffficient) about bbox width/height loss")
-
-    # tracking
-    parser.add_argument('--checkpoint', default="", type=str)
-    parser.add_argument('--exemplar_size', default=127, type=int)
-    parser.add_argument('--search_size', default=255, type=int)
-    parser.add_argument('--context_amount', default=0.5, type=float)
     parser.add_argument('--use_baseline_tracker', action='store_true')
-
-    # * hyper-parameter for tracking
-    parser.add_argument('--score_threshold', default=0.05, type=float,
-                        help='the lower score threshold to recognize a target (score_target > threshold) ')
-    parser.add_argument('--window_steps', default=3, type=int,
-                        help='the pyramid factor to gradually reduce the widow effect')
-    parser.add_argument('--window_factor', default=0.4, type=float,
-                        help='the factor of the hanning window for heatmap post process')
-    parser.add_argument('--tracking_size_penalty_k', default=0.04, type=float,
-                        help='the factor to penalize the change of size')
-    parser.add_argument('--tracking_size_lpf', default=0.8, type=float,
-                        help='the factor of the lpf for size tracking')
-    parser.add_argument('--dcf_rate', default=0.8, type=float,
-                        help='the weight for integrate dcf and trtr for heatmap ')
-    parser.add_argument('--dcf_sample_memory_size', default=250, type=int,
-                        help='the size of the trainining sample for DCF ')
-
-    parser.add_argument('--dcf_size', default=0, type=int,
-                        help='the size for feature for dcf')
-    parser.add_argument('--boundary_recovery', action='store_true',
-                        help='whether use boundary recovery')
-    parser.add_argument('--hard_negative_recovery', action='store_true',
-                        help='whether use hard negative recovery')
-    parser.add_argument('--lost_target_recovery', action='store_true',
-                        help='whether use lost target recovery')
-    parser.add_argument('--lost_target_margin', default=0.3, type=float)
-    parser.add_argument('--translation_threshold', default=0.03, type=float)
-    parser.add_argument('--lost_target_cnt_threshold', default=60, type=int)
-    parser.add_argument('--lost_target_score_threshold', default=0.5, type=float)
-
+    parser.add_argument('--video_name', default="", type=str)
     parser.add_argument('--debug', action='store_true', help='wheterh visualize the debug result')
 
     return parser

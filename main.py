@@ -13,19 +13,27 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 import util.misc as utils
 from datasets.dataset import build as build_dataset
+from datasets.dataset import get_args_parser as dataset_args_parser
 from engine import evaluate, train_one_epoch
 from models import build_model
-from models.tracker import build_tracker
 from benchmark import eval as benchmark_eval
 from benchmark import test as benchmark_test
+from models.trtr import get_args_parser as trtr_args_parser
 
-'''
-usage:
-$ python main.py --dataset_paths ./datasets/yt_bb/youtube_bb/Curation ./datasets/vid/ILSVRC2015/Curation/ --dataset_video_frame_ranges 100 3 --daset_num_uses 100000 -1 # check pysot
-'''
+# for test
+from models.tracker import build_tracker
+from models.tracker import get_args_parser as tracker_args_parser
+
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('tracking evaluation', add_help=False)
+    parser = argparse.ArgumentParser('tracking evaluation', add_help=False, parents=[trtr_args_parser(), dataset_args_parser()])
+
+    # training
+    parser.add_argument('--output_dir', default='',
+                        help='path where to save, empty for no saving')
+    parser.add_argument('--resume', default='', help='resume from checkpoint')
+
+    parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--lr', default=1e-4, type=float)
     parser.add_argument('--lr_backbone', default=1e-5, type=float)
     parser.add_argument('--batch_size', default=2, type=int)
@@ -35,73 +43,10 @@ def get_args_parser():
     parser.add_argument('--lr_gamma', default=0.5, type=float)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
-
-    # Model parameters
-    # * Backbone
-    parser.add_argument('--backbone', default='resnet50', type=str,
-                        help="Name of the convolutional backbone to use")
-    parser.add_argument('--resnet_dilation', action='store_false',
-                        help="If true (default), we replace stride with dilation in resnet blocks") #default is true
-    parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
-                        help="Type of positional embedding to use on top of the image features")
-
-    # * Transformer
-    parser.add_argument('--enc_layers', default=6, type=int,
-                        help="Number of encoding layers in the transformer")
-    parser.add_argument('--dec_layers', default=6, type=int,
-                        help="Number of decoding layers in the transformer")
-    parser.add_argument('--dim_feedforward', default=2048, type=int,
-                        help="Intermediate size of the feedforward layers in the transformer blocks")
-    parser.add_argument('--hidden_dim', default=256, type=int,
-                        help="Size of the embeddings (dimension of the transformer)")
-    parser.add_argument('--dropout', default=0.1, type=float,
-                        help="Dropout applied in the transformer")
-    parser.add_argument('--nheads', default=8, type=int,
-                        help="Number of attention heads inside the transformer's attentions")
-    parser.add_argument('--pre_norm', action='store_true')
-    parser.add_argument('--return_layers', default=[], nargs='+')
-    parser.add_argument('--weighted', action='store_true',
-                        help="the weighted for the multiple input embedding for transformer")
-    parser.add_argument('--transformer_mask', action='store_true',
-                        help="mask for transformer")
-
-    # Loss
-    parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
-                        help="Disables auxiliary decoding losses (loss at each layer)")
-    parser.add_argument('--loss_mask', action='store_true',
-                        help="mask for heamtmap loss")
-
-
-    # * Loss coefficients
-    parser.add_argument('--reg_loss_coef', default=1, type=float,
-                        help="weight (coeffficient) about bbox offset reggresion loss")
-    parser.add_argument('--wh_loss_coef', default=1, type=float,
-                        help="weight (coeffficient) about bbox width/height loss")
-
-    # dataset parameters
-    parser.add_argument('--dataset_paths', default=[], nargs='+') # the path to datasets
-    parser.add_argument('--dataset_video_frame_ranges', default=[100], nargs='+')
-    parser.add_argument('--dataset_num_uses', default=[-1], nargs='+')
-    parser.add_argument('--template_aug_shift', default=4, type=int)
-    parser.add_argument('--template_aug_scale', default=0.05, type=float)
-    parser.add_argument('--template_aug_color', default=1.0, type=float) # Pysot is 1.0
-    parser.add_argument('--search_aug_shift', default=64, type=int)
-    parser.add_argument('--search_aug_scale', default=0.18, type=float)
-    parser.add_argument('--search_aug_blur', default=0.2, type=float)  # Pysot is 0.2
-    parser.add_argument('--search_aug_color', default=1.0, type=float)  # Pysot is 1.0
-    parser.add_argument('--exempler_size', default=127, type=int)
-    parser.add_argument('--search_size', default=255, type=int)
-    parser.add_argument('--negative_aug_rate', default=0.2, type=float)
-    parser.add_argument('--eval_dataset_num_uses', default=[], nargs='+')
-
-    parser.add_argument('--output_dir', default='',
-                        help='path where to save, empty for no saving')
-    parser.add_argument('--device', default='cuda',
-                        help='device to use for training / testing')
-    parser.add_argument('--seed', default=42, type=int)
-    parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
+
+    # dataset
     parser.add_argument('--num_workers', default=2, type=int)
 
     # distributed training parameters
@@ -153,8 +98,8 @@ def main(args):
                                   weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop, gamma = args.lr_gamma)
 
-    dataset_train = build_dataset(image_set='train', args=args)
-    dataset_val = build_dataset(image_set='val', args=args)
+    dataset_train = build_dataset(image_set='train', args=args, model = model)
+    dataset_val = build_dataset(image_set='val', args=args, model = model)
 
     if args.distributed:
         sampler_train = DistributedSampler(dataset_train)
@@ -190,7 +135,7 @@ def main(args):
     benchmark_test_args.result_path = Path(os.path.join(args.output_dir, 'benchmark'))
     benchmark_test_args.dataset_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'benchmark')
 
-    benchmark_eval_parser = argparse.ArgumentParser('benchmark dataset inference', parents=[benchmark_eval.get_args_parser(), get_args_parser()],conflict_handler='resolve')
+    benchmark_eval_parser = argparse.ArgumentParser('benchmark dataset evaluation', parents=[benchmark_eval.get_args_parser(), get_args_parser()],conflict_handler='resolve')
     benchmark_eval_args = benchmark_eval_parser.parse_args()
     benchmark_eval_args.tracker_path = benchmark_test_args.result_path
     best_eao = 0
@@ -241,18 +186,22 @@ def main(args):
         # evualute with benchmark
         if utils.is_main_process():
             if (epoch + 1) % args.benchmark_test_step == 0 and epoch > args.benchmark_start_epoch:
+
                 tracker = build_tracker(benchmark_test_args, model = model_without_ddp, postprocessors = postprocessors)
+                benchmark_test_args.model_name = "epoch" + str(epoch)
                 benchmark_start_time = time.time()
                 benchmark_test.main(benchmark_test_args, tracker)
                 benchmark_time = time.time() - benchmark_start_time
 
+                benchmark_eval_args.model_name = "epoch" + str(epoch)
+                benchmark_eval_args.tracker_prefix = "epoch" + str(epoch)
                 eval_results = benchmark_eval.main(benchmark_eval_args)
                 eval_result = list(eval_results.values())[0]
 
-                if benchmark_test_args.dataset in ['VOT2016', 'VOT2017', 'VOT2018', 'VOT2019']:
+                if benchmark_test_args.dataset == ['VOT2018', 'VOT2019']:
                     if args.output_dir:
                         with (output_dir / str("benchmark_" +  benchmark_test_args.dataset + ".txt")).open("a") as f:
-                            f.write("epoch: " + str(epoch) + ", best EAO: " + str(best_eao) + ", type: without_transformer_mask, " + json.dumps(eval_result) +  "\n")
+                            f.write("epoch: " + str(epoch) + ", best EAO: " + str(best_eao) + ", " + json.dumps(eval_result) +  "\n")
 
                     if best_eao < eval_result['EAO']:
 
@@ -262,7 +211,7 @@ def main(args):
                             best_eao_int = int(best_eao*1000)
 
                             # record: only inference model
-                            utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / f'checkpoint{epoch:04}_best_eao_{best_eao_int:03}_without_transformer_mask_only_inference.pth')
+                            utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / f'checkpoint{epoch:04}_best_eao_{best_eao_int:03}_only_inference.pth')
 
                     if best_ar[0] < eval_result['accuracy'] and best_ar[1] > eval_result['robustness']:
 
@@ -274,54 +223,10 @@ def main(args):
                             best_robustness_int = int(best_ar[1]*1000)
 
                             # record: only inference model
-                            utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / f'checkpoint{epoch:04}_best_ar_{best_accuracy_int:03}_{best_robustness_int:03}_without_transformer_mask_only_inference.pth')
+                            utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / f'checkpoint{epoch:04}_best_ar_{best_accuracy_int:03}_{best_robustness_int:03}_only_inference.pth')
 
                 print("benchmark time: {}".format(benchmark_time))
 
-
-                # explicitly make the transformer mask as true
-                benchmark_test_args.transformer_mask = True
-                inference_model, _, inference_postprocessors = build_model(benchmark_test_args)
-
-                inference_model.load_state_dict(model_without_ddp.state_dict())
-                inference_model.to(device)
-                tracker = build_tracker(benchmark_test_args, model = inference_model, postprocessors = inference_postprocessors)
-                benchmark_start_time = time.time()
-                benchmark_test.main(benchmark_test_args, tracker)
-                benchmark_time = time.time() - benchmark_start_time
-
-                eval_results = benchmark_eval.main(benchmark_eval_args)
-                eval_result = list(eval_results.values())[0]
-
-                if benchmark_test_args.dataset in ['VOT2016', 'VOT2017', 'VOT2018', 'VOT2019']:
-                    if args.output_dir:
-                        with (output_dir / str("benchmark_" +  benchmark_test_args.dataset + ".txt")).open("a") as f:
-                            f.write("epoch: " + str(epoch) + ", best EAO: " + str(best_eao) + ", type: with_transformer_mask, " + json.dumps(eval_result) +  "\n")
-
-                    if best_eao < eval_result['EAO']:
-
-                        best_eao = eval_result['EAO']
-
-                        if args.output_dir:
-                            best_eao_int = int(best_eao*1000)
-
-                            # record only inference model
-                            utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / f'checkpoint{epoch:04}_best_eao_{best_eao_int:03}_with_transformer_mask_only_inference.pth')
-
-                    if best_ar[0] < eval_result['accuracy'] and best_ar[1] > eval_result['robustness']:
-
-                        best_ar[0] = eval_result['accuracy']
-                        best_ar[1] = eval_result['robustness']
-
-                        if args.output_dir:
-                            best_accuracy_int = int(best_ar[0]*1000)
-                            best_robustness_int = int(best_ar[1]*1000)
-
-                            # record: only inference model
-                            utils.save_on_master({'model': model_without_ddp.state_dict()}, output_dir / f'checkpoint{epoch:04}_best_ar_{best_accuracy_int:03}_{best_robustness_int:03}_with_transformer_mask_only_inference.pth')
-
-
-                print("benchmark time: {}".format(benchmark_time))
         if args.distributed:
             torch.distributed.barrier()
 

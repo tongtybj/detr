@@ -12,6 +12,7 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
+import argparse
 from importlib import import_module
 import mimetypes
 import logging
@@ -170,31 +171,19 @@ class SubDataset(object):
 
 class TrkDataset(Dataset):
     def __init__(self,
-                 image_set, dataset_paths,
+                 model, image_set, dataset_paths,
                  dataset_video_frame_ranges, dataset_num_uses,
                  template_shift, template_scale, template_color,
                  search_shift, search_scale, search_blur, search_color,
                  exempler_size = 127, search_size = 255,
-                 negative_rate = 0.5,
-                 return_layers = [],
-                 resnet_dilation = False):
+                 negative_rate = 0.5):
         super(TrkDataset, self).__init__()
 
         self.exempler_size = exempler_size
         self.search_size = search_size
         self.negative_rate = negative_rate
 
-        # woraround for resnet layer2 - layer4
-        if resnet_dilation:
-            resnet_dilation = [False, True, True]
-        else:
-            resnet_dilation = [False, False, False]
-        final_layer = int(return_layers[-1][-1])
-
-        stride = 4
-        for layer in range(final_layer - 1):
-            if not resnet_dilation[layer]:
-                stride = stride * 2
+        stride = model.backbone.stride
         self.output_size = (self.search_size + stride - 1) // stride
 
         # create sub dataset
@@ -392,7 +381,27 @@ class TrkDataset(Dataset):
 
         return template, search, template_mask, search_mask, target_dict
 
-def build(image_set, args):
+def get_args_parser():
+    parser = argparse.ArgumentParser('dataset', add_help=False)
+
+    parser.add_argument('--dataset_paths', default=[], nargs='+') # the path to datasets
+    parser.add_argument('--dataset_video_frame_ranges', default=[100], nargs='+')
+    parser.add_argument('--dataset_num_uses', default=[-1], nargs='+')
+    parser.add_argument('--template_aug_shift', default=4, type=int)
+    parser.add_argument('--template_aug_scale', default=0.05, type=float)
+    parser.add_argument('--template_aug_color', default=1.0, type=float) # Pysot is 1.0
+    parser.add_argument('--search_aug_shift', default=64, type=int)
+    parser.add_argument('--search_aug_scale', default=0.18, type=float)
+    parser.add_argument('--search_aug_blur', default=0.2, type=float)  # Pysot is 0.2
+    parser.add_argument('--search_aug_color', default=1.0, type=float)  # Pysot is 1.0
+    parser.add_argument('--exempler_size', default=127, type=int)
+    parser.add_argument('--search_size', default=255, type=int)
+    parser.add_argument('--negative_aug_rate', default=0.2, type=float)
+    parser.add_argument('--eval_dataset_num_uses', default=[], nargs='+')
+
+    return parser
+
+def build(image_set, args, model):
 
     assert len(args.dataset_paths) == len(args.dataset_video_frame_ranges) == len(args.dataset_num_uses)
 
@@ -401,13 +410,21 @@ def build(image_set, args):
             args.dataset_num_uses = args.eval_dataset_num_uses
         else:
             args.dataset_num_uses = [-1] * len(args.dataset_num_uses)
-    
-    dataset = TrkDataset(image_set, args.dataset_paths,
-                         args.dataset_video_frame_ranges, args.dataset_num_uses,
-                         args.template_aug_shift, args.template_aug_scale, args.template_aug_color,
-                         args.search_aug_shift, args.search_aug_scale, args.search_aug_blur, args.search_aug_color,
-                         args.exempler_size, args.search_size,
-                         args.negative_aug_rate,
-                         args.return_layers,
-                         args.resnet_dilation)
+
+    dataset = TrkDataset(model,
+                         image_set,
+                         args.dataset_paths,
+                         args.dataset_video_frame_ranges,
+                         args.dataset_num_uses,
+                         args.template_aug_shift,
+                         args.template_aug_scale,
+                         args.template_aug_color,
+                         args.search_aug_shift,
+                         args.search_aug_scale,
+                         args.search_aug_blur,
+                         args.search_aug_color,
+                         args.exempler_size,
+                         args.search_size,
+                         args.negative_aug_rate
+                         )
     return dataset

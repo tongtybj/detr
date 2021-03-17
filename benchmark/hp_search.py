@@ -18,7 +18,7 @@ def get_args_parser(parser, hpnames):
                         help="best score mode if separate_mode is false")
 
     parser.add_argument('--save_path', default='hp_search', type=str)
-    
+
     return parser
 
 def main(args, hpnames):
@@ -35,7 +35,6 @@ def main(args, hpnames):
     if args.separate_mode:
         repetition = args.repetition
         args.repetition  = 1 # separate model (non best score model)
-        
 
     # create dir for result
     layers_info = 'trtr_layer'

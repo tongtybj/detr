@@ -1,3 +1,4 @@
+import argparse
 import math
 import time
 import importlib
@@ -20,6 +21,7 @@ from util.box_ops import box_cxcywh_to_xyxy
 from util.misc import is_dist_avail_and_initialized, nested_tensor_from_tensor_list
 from models import build_model
 from models.backbone import Backbone as Resnet
+from models.tracker import get_args_parser as baseline_tracker_args_parser
 
 # External Module (TODO: remove)
 sys.path.append(os.path.join(os.path.dirname(__file__), '../external_tracker/external_module/pytracking'))
@@ -1166,6 +1168,31 @@ class Tracker():
 
         return TensorList(dcf_features)
 
+def get_args_parser():
+    parser = argparse.ArgumentParser('baseline tracker', add_help=False, parents=[baseline_tracker_args_parser()])
+
+    # * hyper-parameter for tracking
+    parser.add_argument('--dcf_layers', default=[], nargs='+')
+    parser.add_argument('--dcf_rate', default=0.6, type=float,
+                        help='the weight for integrate dcf and trtr for heatmap ')
+    parser.add_argument('--dcf_sample_memory_size', default=250, type=int,
+                        help='the size of the trainining sample for DCF ')
+
+    parser.add_argument('--dcf_size', default=0, type=int,
+                        help='the size for feature for dcf')
+    parser.add_argument('--boundary_recovery', action='store_true',
+                        help='whether use boundary recovery')
+    parser.add_argument('--hard_negative_recovery', action='store_true',
+                        help='whether use hard negative recovery')
+    parser.add_argument('--lost_target_recovery', action='store_true',
+                        help='whether use lost target recovery')
+    parser.add_argument('--lost_target_margin', default=0.3, type=float)
+    parser.add_argument('--translation_threshold', default=0.03, type=float)
+    parser.add_argument('--lost_target_cnt_threshold', default=60, type=int)
+    parser.add_argument('--lost_target_score_threshold', default=0.5, type=float)
+
+    return parser
+
 def build_tracker(args):
 
     if not torch.cuda.is_available():
@@ -1181,4 +1208,25 @@ def build_tracker(args):
     model.load_state_dict(checkpoint['model'])
     model.to(device)
 
-    return Tracker(model, postprocessors["bbox"], args.search_size, args.window_factor, args.score_threshold, args.window_steps, args.tracking_size_penalty_k, args.tracking_size_lpf, args.dcf_size, args.dcf_layers, args.dcf_rate, args.dcf_sample_memory_size, args.boundary_recovery, args.hard_negative_recovery, args.lost_target_recovery, args.lost_target_margin, args.translation_threshold, args.lost_target_score_threshold, args.lost_target_cnt_threshold)
+    if len(args.dcf_layers) == 0:
+        args.dcf_layers = ['layer2', 'layer3']
+
+    return Tracker(model,
+                   postprocessors["bbox"],
+                   args.search_size,
+                   args.window_factor,
+                   args.score_threshold,
+                   args.window_steps,
+                   args.tracking_size_penalty_k,
+                   args.tracking_size_lpf,
+                   args.dcf_size,
+                   args.dcf_layers,
+                   args.dcf_rate,
+                   args.dcf_sample_memory_size,
+                   args.boundary_recovery,
+                   args.hard_negative_recovery,
+                   args.lost_target_recovery,
+                   args.lost_target_margin,
+                   args.translation_threshold,
+                   args.lost_target_score_threshold,
+                   args.lost_target_cnt_threshold)
