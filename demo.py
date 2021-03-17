@@ -79,6 +79,7 @@ def main(args, tracker):
 
             tracker.init(frame, init_rect)
             first_frame = False
+            continue
 
 
         output = tracker.track(frame)
