@@ -343,7 +343,6 @@ def build(args):
 
     position_embedding = build_position_encoding(args)
 
-    print("backbone arg: ", args)
     if hasattr(args, 'train_backbone'):
         train_backbone = args.train_backbone
     else:

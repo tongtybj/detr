@@ -1,5 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-import argparse
+from jsonargparse import ArgumentParser, ActionParser
 import os
 import time
 import datetime
@@ -8,8 +7,9 @@ import itertools
 from models.tracker import build_tracker as build_baseline_tracker
 from models.hybrid_tracker import build_tracker as build_online_tracker
 
+def get_args_parser(hpnames):
 
-def get_args_parser(parser, hpnames):
+    parser = benchmark.get_args_parser()
 
     for name in hpnames:
         parser.add_argument('--' + name, default=[], nargs='+')
@@ -23,53 +23,57 @@ def get_args_parser(parser, hpnames):
 
 def main(args, hpnames):
 
-    # TODO: record model configuration in checkpoint
-    if len(args.return_layers) == 0:
-        args.return_layers = ['layer3']
-
-    if len(args.dcf_layers) == 0:
-        args.dcf_layers = ['layer2', 'layer3']
-
     # separate mode or best score mode
     repetition = 1
     if args.separate_mode:
         repetition = args.repetition
         args.repetition  = 1 # separate model (non best score model)
 
+    # TODO: record model configuration in checkpoint
+    if len(args.tracker.model.backbone.return_layers) == 0:
+        args.tracker.model.backbone.return_layers = ['layer3']
+
+    if len(args.tracker.dcf.layers) == 0:
+        args.tracker.dcf.layers = ['layer2', 'layer3']
+
     # create dir for result
     layers_info = 'trtr_layer'
-    for layer in args.return_layers:
+    for layer in args.tracker.model.backbone.return_layers:
         layers_info += '_' + layer[-1]
     if args.use_baseline_tracker:
         layers_info += '_baseline'
     else:
         layers_info += '_dcf_layer'
-        for layer in args.dcf_layers:
+        for layer in args.tracker.dcf.layers:
             layers_info += '_' + layer[-1]
 
 
     if args.separate_mode:
         args.save_path += '_separate'
     args.result_path = os.path.join(args.save_path,
-                                    os.path.splitext(os.path.basename(args.checkpoint))[0],
+                                    os.path.splitext(os.path.basename(args.tracker.checkpoint))[0],
                                     layers_info)
     dataset_path = os.path.join(args.result_path, args.dataset)
     if not os.path.isdir(dataset_path):
         os.makedirs(dataset_path)
 
-
     hparams = dict()
     for name in hpnames:
-        val = getattr(args, name)
-        core_name = name[:-1]
-        default_value = getattr(args, core_name)
-        assert core_name in vars(args).keys()
+
+        val = args
+        for idx,  n in enumerate(name.split('.')):
+
+            if idx == len(name.split('.')) - 1:
+                default_value = getattr(val, n[:-1])
+
+            val = getattr(val, n)
+
 
         if len(val) == 0:
             hparams[name] = [default_value]
         else:
             hparams[name] = [type(default_value)(v) for v in val]
-    hparams['run'] = list(range(1, repetition + 1))
+    hparams['runs'] = list(range(1, repetition + 1))
 
     tracker_num = len(list(itertools.product(*hparams.values())))
 
@@ -80,23 +84,28 @@ def main(args, hpnames):
         if args.use_baseline_tracker:
             model_name = 'baseline_'
         for idx, (name, val) in enumerate(zip(hparams.keys(), hparam_set)):
-            if hasattr(args, name):
-                name = name[:-1] # core name
-                setattr(args, name, val)
+
+            args_temp = args
+            for str_id,  n in enumerate(name[:-1].split('.')):
+                if str_id == len(name.split('.')) - 1:
+                    setattr(args_temp, n, val)
+
+                args_temp = getattr(args_temp, n)
+
 
             if args.use_baseline_tracker and 'dcf' in name:
                 continue
 
-            model_name += name + "_" + str(val).replace('.', 'p')
+            model_name += name[:-1].replace('tracker.', '').replace('postprocess.', '').replace('.', '_') + "_" + str(val).replace('.', 'p')
             if idx < len(hparam_set) - 1:
                 model_name += '_'
-                
+
         if not args.use_baseline_tracker:
             model_name += '_false_positive' # workaround to distinguish with old model name
 
-        if args.transformer_mask:
+        if args.tracker.model.transformer_mask:
             model_name += '_with_transformer_mask'
-            
+
         #print(model_name)
         model_dir = os.path.join(dataset_path, model_name)
         if not os.path.isdir(model_dir):
@@ -109,9 +118,9 @@ def main(args, hpnames):
 
         # create tracker
         if args.use_baseline_tracker:
-            tracker = build_baseline_tracker(args)
+            tracker = build_baseline_tracker(args.tracker)
         else:
-            tracker = build_online_tracker(args)
+            tracker = build_online_tracker(args.tracker)
 
         # start test with benchmark
         benchmark.main(args, tracker)
@@ -121,12 +130,9 @@ def main(args, hpnames):
 
 if __name__ == '__main__':
 
-    hpnames = ['search_sizes', 'window_factors', 'tracking_size_lpfs', 'dcf_sizes', 'dcf_rates', 'dcf_sample_memory_sizes'] # please add hyperparameter here
+    hpnames = ['tracker.search_sizes', 'tracker.postprocess.window_factors', 'tracker.postprocess.tracking_size_lpfs', 'tracker.dcf.sizes', 'tracker.dcf.rates', 'tracker.dcf.sample_memory_sizes'] # please add hyperparameter here
 
-    #hpnames = ['search_sizes']
-
-
-    parser = argparse.ArgumentParser('hyperparameter search for benchmark', parents=[get_args_parser(benchmark.get_args_parser(), hpnames)])
+    parser = get_args_parser(hpnames)
     args = parser.parse_args()
 
     #print(args)

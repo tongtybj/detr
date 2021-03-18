@@ -6,7 +6,7 @@ from __future__ import unicode_literals
 import cv2
 import copy
 from glob import glob
-from jsonargparse import ArgumentParser, ActionParser
+from jsonargparse import ArgumentParser, ActionParser, ActionConfigFile
 import numpy as np
 import os
 import sys
@@ -57,6 +57,9 @@ def get_args_parser():
     parser.add_argument('--min_lost_rate_for_repeat', default=0.1, type=float) # change for different benchmark
 
     parser.add_argument('--tracker', action=ActionParser(parser=tracker_args_parser()))
+
+    # yaml config file for all parameters
+    parser.add_argument('--cfg_file', action=ActionConfigFile)
 
     return parser
 

@@ -1,6 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import datetime
-from jsonargparse import ArgumentParser, ActionParser
+from jsonargparse import ArgumentParser, ActionParser, ActionConfigFile
 import json
 import random
 import time
@@ -73,6 +73,8 @@ def get_args_parser():
     # TrTr
     parser.add_argument('--model', action=ActionParser(parser=trtr_args_parser()))
 
+    # yaml config file for all parameters
+    parser.add_argument('--cfg_file', action=ActionConfigFile)
 
     return parser
 
@@ -114,8 +116,8 @@ def main(args):
                                   weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop, gamma = args.lr_gamma)
 
-    dataset_train = build_dataset(image_set='train', args=args.dataset, model_stride = model.backbone.stride)
-    dataset_val = build_dataset(image_set='val', args=args.dataset, model_stride = model.backbone.stride)
+    dataset_train = build_dataset(image_set='train', args=args.dataset, model_stride = model_without_ddp.backbone.stride)
+    dataset_val = build_dataset(image_set='val', args=args.dataset, model_stride = model_without_ddp.backbone.stride)
 
     if args.distributed:
         sampler_train = DistributedSampler(dataset_train)
