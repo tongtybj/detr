@@ -1,4 +1,3 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import datetime
 from jsonargparse import ArgumentParser, ActionParser, ActionConfigFile
 import json

@@ -1,6 +1,3 @@
-"""
-    @author fangyi.zhang@vipl.ict.ac.cn
-"""
 import numpy as np
 
 def determine_thresholds(confidence, resolution=100):

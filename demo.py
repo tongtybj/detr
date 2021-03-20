@@ -70,14 +70,16 @@ def main(args, tracker):
         video_name = args.video_name.split('/')[-1].split('.')[0]
     else:
         video_name = 'webcam'
-    cv2.namedWindow(video_name, cv2.WND_PROP_FULLSCREEN)
 
     template_image = None
     for frame in get_frames(args.video_name):
 
         if first_frame:
             try:
-                init_rect = cv2.selectROI(video_name, frame, False, False)
+                cv2.namedWindow("Select Roi",1)
+                cv2.putText(frame, "select bounding box using cursor,", (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                cv2.putText(frame, "and press 'Enter' to start", (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                init_rect = cv2.selectROI("Select Roi", frame, False, False)
             except:
                 exit()
 

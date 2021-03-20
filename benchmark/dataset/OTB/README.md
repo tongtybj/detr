@@ -3,9 +3,9 @@
 ## Create directory for dataset
 
 ````shell
-ln -sfb ${PWD}/dataset ./dataset # $PWD/dataset is the dierectory to store dataset
+ln -sfb ${PWD}/dataset ./dataset
 ````
-**note**: you can skip this command, which will create a child directory `dataset` in this directory(`./OTB`)
+**note**: `$PWD/dataset` is the directory to store dataset. Suppose you have sufficient space under `$PWD/dataset`
 
 ## Download and unzip dataset
 

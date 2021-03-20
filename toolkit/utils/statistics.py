@@ -1,6 +1,3 @@
-"""
-    @author fangyi.zhang@vipl.ict.ac.cn
-"""
 import numpy as np
 from . import region
 

@@ -10,33 +10,50 @@
 
 ## Download Dataset
 
-### VOT
-Please read README.md in `benchmark/VOT`
+#### VOT
 
-### OTB (OTB100)
+Please `cd VOT`, and follow [README.md](./VOT/README.md).
 
-Please read README.md in `benchmark/OTB`
+#### OTB (OTB100)
 
-### UAV (UAV123)
+Please `cd OTB`, and follow [README.md](./OTB/README.md).
 
-Please read README.md in `benchmark/UAV`
+#### UAV (UAV123)
 
-### NFS (NFS30)
+Please `cd UAV`, and follow [README.md](./UAV/README.md).
 
-Please read README.md in `benchmark/NFS`
+#### NFS (NFS30)
 
-### TrackingNet
+Please `cd NFS`, and follow [README.md](./NFS/README.md).
 
-- Please read README.md in `benchmark/TrackingNet`
+#### TrackingNet
+
+- Please `cd TrackingNet`, and follow [README.md](./TrackingNet/README.md).
 - Please submit the tracking result as `.zip` file to the organization. Please follow [the official instruction](https://github.com/SilvioGiancola/TrackingNet-devkit)
 
-### LaSOT
-- Please **manually** download the test dataset from https://drive.google.com/file/d/1EpeWYN4Li7eTvzTYg-B917S7RWNbwzHv/view
+#### LaSOT
+- Please **manually** download the zipped test dataset from [here](https://drive.google.com/file/d/1EpeWYN4Li7eTvzTYg-B917S7RWNbwzHv/view)
 - Please **manually** unzip the dataset
-- Please **manually** create a symbolic link: `benchmark/dataset/LaSOT`
+- Please **manually** create a symbolic link: `ln -s ${unzipped_dir} ./benchmark/dataset/LaSOT`
 - Please submit the tracking result as `.zip` file to the organization. Please follow [the official instruction](http://got-10k.aitestunion.com/submit_instructions)
 
-### GOT-10K
-- Please **manually** download the test dataset `Test data only` from http://got-10k.aitestunion.com/downloads
-- Please **manually** unzip the dataset
-- Please **manually** create a symbolic link: `benchmark/dataset/GOT-10k`: `ln -s ${PWD}/test GOT-10k`
+## Directory Strcture
+
+After downloading all datasets, the directory under `./benchmark/dataset`should have the below format
+
+- ./LaSOT (symbolic link)
+- ./NFS (directory)
+    - ./dataset (symbolic link)   
+- ./OTB (directory)
+    - ./dataset (symbolic link)
+- ./TrackingNet (directory)
+    - ./dataset (symbolic link)   
+- ./UAV (directory)   
+    - ./dataset (symbolic link)   
+- ./VOT (directory)   
+    - ./dataset (symbolic link)   
+- ./VOT2018 (symbolic link)  
+- ./VOT2019 (symbolic link)
+
+
+   

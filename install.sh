@@ -97,8 +97,3 @@ python setup.py build_ext --inplace
 echo ""
 echo ""
 echo "****************** Installation complete! ******************"
-
-echo ""
-echo ""
-echo "****************** More networks can be downloaded from the google drive folder TODO ******************"
-echo "****************** Or, visit the model zoo at https://github.com/visionml/pytracking/blob/master/MODEL_ZOO.md ******************"

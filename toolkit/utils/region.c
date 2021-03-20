@@ -1535,6 +1535,7 @@ static const char __pyx_k_right[] = "right";
 static const char __pyx_k_s_s_d[] = "<%s.%s: %d>";
 static const char __pyx_k_value[] = "value";
 static const char __pyx_k_width[] = "width";
+static const char __pyx_k_author[] = "\n    @author \n";
 static const char __pyx_k_bottom[] = "bottom";
 static const char __pyx_k_bounds[] = "bounds";
 static const char __pyx_k_encode[] = "encode";
@@ -1610,7 +1611,6 @@ static const char __pyx_k_toolkit_utils_region[] = "toolkit.utils.region";
 static const char __pyx_k_toolkit_utils_region_pyx[] = "toolkit/utils/region.pyx";
 static const char __pyx_k_pyx_unpickle___Pyx_EnumMeta[] = "__pyx_unpickle___Pyx_EnumMeta";
 static const char __pyx_k_x_3f_y_3f_width_3f_height_3f[] = "x: {:.3f} y: {:.3f} width: {:.3f} height: {:.3f}";
-static const char __pyx_k_author_fangyi_zhang_vipl_ict_ac[] = "\n    @author fangyi.zhang@vipl.ict.ac.cn\n";
 static const char __pyx_k_top_3f_bottom_3f_left_3f_reight[] = "top: {:.3f} bottom: {:.3f} left: {:.3f} reight: {:.3f}";
 static const char __pyx_k_Incompatible_checksums_s_vs_0xd4[] = "Incompatible checksums (%s vs 0xd41d8cd = ())";
 static const char __pyx_k_no_default___reduce___due_to_non[] = "no default __reduce__ due to non-trivial __cinit__";
@@ -7852,7 +7852,7 @@ static PyModuleDef_Slot __pyx_moduledef_slots[] = {
 static struct PyModuleDef __pyx_moduledef = {
     PyModuleDef_HEAD_INIT,
     "region",
-    __pyx_k_author_fangyi_zhang_vipl_ict_ac, /* m_doc */
+    __pyx_k_author, /* m_doc */
   #if CYTHON_PEP489_MULTI_PHASE_INIT
     0, /* m_size */
   #else
@@ -8445,7 +8445,7 @@ if (!__Pyx_RefNanny) {
   Py_INCREF(__pyx_m);
   #else
   #if PY_MAJOR_VERSION < 3
-  __pyx_m = Py_InitModule4("region", __pyx_methods, __pyx_k_author_fangyi_zhang_vipl_ict_ac, 0, PYTHON_API_VERSION); Py_XINCREF(__pyx_m);
+  __pyx_m = Py_InitModule4("region", __pyx_methods, __pyx_k_author, 0, PYTHON_API_VERSION); Py_XINCREF(__pyx_m);
   #else
   __pyx_m = PyModule_Create(&__pyx_moduledef);
   #endif
@@ -8529,7 +8529,7 @@ if (!__Pyx_RefNanny) {
 
   /* "toolkit/utils/region.pyx":1
  * """             # <<<<<<<<<<<<<<
- *     @author fangyi.zhang@vipl.ict.ac.cn
+ *     @author
  * """
  */
   __pyx_t_1 = __Pyx_PyDict_NewPresized(0); if (unlikely(!__pyx_t_1)) __PYX_ERR(0, 1, __pyx_L1_error)

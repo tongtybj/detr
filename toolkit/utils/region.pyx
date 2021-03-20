@@ -1,5 +1,5 @@
 """
-    @author fangyi.zhang@vipl.ict.ac.cn
+    @author 
 """
 # distutils: sources = src/region.c
 # distutils: include_dirs = src/
