@@ -225,16 +225,6 @@ def main(args, tracker):
     else:
         # OPE tracking
 
-        find_best = True
-
-        if not dataset.has_ground_truth:
-            find_best = False
-
-        # if repeat 3 times for GOT-10k, use the official benchmark mode (no find best)
-        if args.dataset == 'GOT-10k':
-            if args.repetition == 3:
-                find_best = False
-
         for v_idx, video in enumerate(dataset):
             if args.video != '':
                 # test one special video
@@ -253,10 +243,6 @@ def main(args, tracker):
                 raw_heatmap = None
                 post_heatmap = None
                 lost_number = 0
-
-                if find_best and min_lost_number < args.min_lost_rate_for_repeat * len(video):
-                    print("Abolish reset of trails ({}~) becuase the min lost number is small enough: {} / {}".format(cnt+1 , min_lost_number, args.min_lost_rate_for_repeat * len(video)))
-                    break
 
                 save_image_offset = 0
                 if args.save_image_num_per_video > 1:
@@ -313,9 +299,6 @@ def main(args, tracker):
                             if pred_bbox[0] + pred_bbox[2] < gt_bbox[0] or pred_bbox[0] > gt_bbox[0] + gt_bbox[2] or pred_bbox[1] + pred_bbox[3] < gt_bbox[1] or pred_bbox[1] > gt_bbox[1] + gt_bbox[3]:
                                 lost_number += 1
 
-                        if find_best and lost_number > min_lost_number:
-                            break
-
 
                         if args.vis or args.debug_vis:
                             cv2.imshow(video.name, img)
@@ -341,9 +324,6 @@ def main(args, tracker):
 
                     sys.stderr.write("inference on {}:  {} / {}\r".format(video.name, idx+1, len(video)))
 
-                if find_best and lost_number > min_lost_number:
-                    print('Stop No.{} trial becuase the lost number already exceed the min lost number: {} > {} '.format(cnt+1, lost_number, min_lost_number))
-                    continue
 
                 if lost_number == 1e6:
                     continue
@@ -359,8 +339,6 @@ def main(args, tracker):
                     if not os.path.isdir(video_path):
                         os.makedirs(video_path)
                     id = cnt + 1
-                    if find_best:
-                        id = 1
                     result_path = os.path.join(video_path, '{}_{:03d}.txt'.format(video.name, id))
                     with open(result_path, 'w') as f:
                         for x in pred_bboxes:

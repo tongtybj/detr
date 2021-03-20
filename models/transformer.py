@@ -56,7 +56,6 @@ class Transformer(nn.Module):
         """
 
         if len(template_src) > 1 and len(search_src) == 1:
-            # print("do multiple frame mode ")
             template_src = template_src.flatten(2) # flatten: bNxCxHxW to bNxCxHW
             template_src = torch.cat(torch.split(template_src,1), -1) # concat: bNxCxHW to 1xCxbNHW
             template_src = template_src.permute(2, 0, 1) # permute 1xCxbNHW to bNHWx1xC for encoder in transformer
@@ -192,7 +191,6 @@ class TransformerEncoderLayer(nn.Module):
         q = k = self.with_pos_embed(src, pos)
         src2, attn_weight_map = self.self_attn(q, k, value=src, attn_mask=src_mask,
                                                key_padding_mask=src_key_padding_mask)
-        #print("encoder: self attn_weight_map: {}".format(attn_weight_map))
         src = src + self.dropout1(src2)
         src = self.norm1(src)
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
@@ -258,14 +256,13 @@ class TransformerDecoderLayer(nn.Module):
         q = k = self.with_pos_embed(tgt, decoder_pos)
         tgt2, attn_weight_map = self.self_attn(q, k, value=tgt, attn_mask=tgt_mask,
                                                key_padding_mask=tgt_key_padding_mask)
-        #print("decoder: self attn_weight_map: {}".format(attn_weight_map))
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
         tgt2, attn_weight_map = self.multihead_attn(query=self.with_pos_embed(tgt, decoder_pos),
                                                           key=self.with_pos_embed(memory, encoder_pos),
                                                           value=memory, attn_mask=memory_mask,
                                                           key_padding_mask=memory_key_padding_mask)
-        #print("decoder: multihead attn_weight_map: {}".format(attn_weight_map))
+
         tgt = tgt + self.dropout2(tgt2)
         tgt = self.norm2(tgt)
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
@@ -284,14 +281,14 @@ class TransformerDecoderLayer(nn.Module):
         q = k = self.with_pos_embed(tgt2, decoder_pos)
         tgt2, attn_weight_map = self.self_attn(q, k, value=tgt2, attn_mask=tgt_mask,
                                                key_padding_mask=tgt_key_padding_mask)
-        #print("decoder: self attn_weight_map: {}".format(attn_weight_map))
+
         tgt = tgt + self.dropout1(tgt2)
         tgt2 = self.norm2(tgt)
         tgt2, attn_weight_map = self.multihead_attn(query=self.with_pos_embed(tgt2, decoder_pos),
                                                     key=self.with_pos_embed(memory, encoder_pos),
                                                     value=memory, attn_mask=memory_mask,
                                                     key_padding_mask=memory_key_padding_mask)
-        #print("decoder: multihead attn_weight_map: {}".format(attn_weight_map))
+
         tgt = tgt + self.dropout2(tgt2)
         tgt2 = self.norm3(tgt)
         tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt2))))

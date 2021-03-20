@@ -99,8 +99,6 @@ class Tracker():
         self.last_valid_position = None
         self.lost_target_cnt = 0
 
-        self.hard_negative_recovery = postprocess_params.hard_negative_recovery
-
         # false positive
         self.max_false_postive = 3
         self.relative_valid_score_threshold = 0.25
@@ -146,7 +144,6 @@ class Tracker():
         # get crop
         s_z, scale_z = siamfc_like_scale(bbox_xyxy)
         s_x = self.search_size / scale_z
-        #print(s_z, s_x, scale_z, image.shape, bbox)
         template_image, _ = crop_image(image, bbox_xyxy, padding = channel_avg)
 
         # get mask
@@ -225,7 +222,6 @@ class Tracker():
         self.dcf_output_sz = self.dcf_img_support_sz # use fourier to get same size with img_support_sz
         self.dcf_kernel_size = self.dcf_fparams.attribute('kernel_size')[0]
         self.dcf_compressed_dim = self.dcf_fparams.attribute('compressed_dim', None)[0]
-        #print(self.dcf_img_support_sz, self.dcf_feature_sz_list, self.dcf_output_sz, self.dcf_kernel_size, self.dcf_compressed_dim)
 
         # Optimization options
         self.dcf_output_window = dcf.hann2d(self.dcf_output_sz.long(), centered=False).to(self.dcf_params.device)
@@ -237,9 +233,6 @@ class Tracker():
         all_train_x = None
         all_init_y = None
         for im_id, (image, target_pos, target_sz, target_scale, channel_avg) in enumerate(zip(self.init_training_images, self.init_training_target_pos, self.init_training_target_sz, self.init_training_target_scale, self.init_training_image_channel_avgs)):
-
-            # if im_id == 0:
-            #     continue
 
             # Extract and transform sample
             train_x = self.dcf_generate_init_samples(image, target_pos, target_scale, channel_avg)
@@ -408,34 +401,6 @@ class Tracker():
         if self.recovery_flag:
             flag = 'recovery'
 
-        # use the last result as template image
-        if flag == 'hard_negative' and self.hard_negative_recovery and not self.recovery_flag:
-            template_image, _ = crop_image(self.prev_image, prev_bbox_xyxy, padding = self.prev_channel_avg)
-
-            # get mask
-            template_mask = [0, 0, template_image.shape[1], template_image.shape[0]] # [x1, y1, x2, y2]
-            if prev_pos[1] < s_z/2:
-                template_mask[0] = (s_z/2 - prev_pos[1]) * scale_z
-            if prev_pos[0] < s_z/2:
-                template_mask[1] = (s_z/2 - prev_pos[0]) * scale_z
-            if prev_pos[1] + s_z/2 > image.shape[1]:
-                template_mask[2] = template_mask[2] - (prev_pos[1] + s_z/2 - image.shape[1]) * scale_z
-            if prev_pos[0] + s_z/2 > image.shape[0]:
-                template_mask[3] = template_mask[3] - (prev_pos[0] + s_z/2 - image.shape[0]) * scale_z
-
-            # normalize and conver to torch.tensor
-            # TODO: use extracted feature from search image
-            template = self.image_normalize(np.round(template_image).astype(np.uint8)).cuda()
-            with torch.no_grad():
-                outputs = self.model(nested_tensor_from_tensor_list([search], [torch.as_tensor(search_mask).float()]),
-                                     nested_tensor_from_tensor_list([template], [torch.as_tensor(template_mask).float()]))
-                self.first_frame = True
-
-            all_features = outputs["all_features"]
-            outputs = self.postprocess(outputs)
-            #print("use last result as template image")
-
-
         # Combine with TrTr tracking framework
         out = self.combine(image.shape[:2], prev_pos[[1,0]], prev_sz[[1,0]], scale_z, outputs, search_image, flag, dcf_heatmap = dcf_heatmap, test_x = test_x)
 
@@ -443,18 +408,15 @@ class Tracker():
         # we check the static target (position is almost constant) with the close range to the boundary
         # the threshould contain translation, static cnt, the score with init template
         if self.lost_target_recovery and not self.recovery_flag:
-            # print('trtr score: {}; bbox_in_search_image: {}, dcf_map: {}'.format(out['trtr_score'], out['bbox_in_search_image'].numpy(), dcf_heatmap.shape))
 
             # TODO: also cosider the size of the bbox, and the change of the size
             if self.last_valid_position is not None:
                  translation = torch.norm(self.target_pos - self.last_valid_position).item()
                  translation_threshold = self.translation_threshold * min(image.shape[:2])
-                 #print('translation: {}, translation_threshold: {}, target_pos: {}, last_valid_position: {}, image shape: {}'.format(translation, translation_threshold, self.target_pos.numpy(), self.last_valid_position.numpy(), image.shape))
 
                  close_boundary = (self.target_pos[1] < self.lost_target_margin * image.shape[1] or self.target_pos[1] > (1 - self.lost_target_margin ) * image.shape[1]) or (self.target_pos[0] < self.lost_target_margin * image.shape[0] or self.target_pos[0] > (1 - self.lost_target_margin ) * image.shape[0])
                  if translation < translation_threshold  and close_boundary:
                          self.lost_target_cnt += 1
-                         #print("self.lost_target_cnt: ", self.lost_target_cnt)
                  else:
                      # reset since large
                      self.lost_target_cnt = 0
@@ -468,7 +430,6 @@ class Tracker():
                 dcf_heatmap /= len(self.dcf_layers)
                 # TODO: should be a region of bounding box for both dcf_heatmap and trtr_heatmap, not the center point or the max score.
                 dcf_score = dcf_heatmap[0][self.search_size //2][self.search_size //2]
-                #print("check the score for the static target, trtr score: {} / {}, posititon in search image{}, dcf score: {} / {}, ".format(out['trtr_score'], self.init_trtr_score, out['bbox_in_search_image'], dcf_score, self.init_dcf_score))
 
                 if out['trtr_score'] < self.lost_target_score_threshold * self.init_trtr_score  or dcf_score < self.lost_target_score_threshold * self.init_dcf_score:
 
@@ -502,7 +463,6 @@ class Tracker():
             bbox_ct = out['bbox_in_search_image']
             delta = (bbox_ct - self.search_size / 2).abs().max().item()
             if delta > self.max_translation:
-                # print('fast target motion in the first frame : {}/{}'.format(delta, self.max_translation))
                 self.search_size = self.expand_search_size # heuristic
                 self.window_factor /= 2 # heuristic
 
@@ -588,7 +548,7 @@ class Tracker():
             resized_dcf_heatmap /= len(self.dcf_layers)
             unroll_resized_dcf_heatmap = torch.tensor(resized_dcf_heatmap).view(self.heatmap_size * self.heatmap_size)
             best_idx = torch.argmax(unroll_resized_dcf_heatmap)
-            # print("the peak {} in dcf heatmap: {}".format(torch.max(unroll_resized_dcf_heatmap), [best_idx % self.heatmap_size, best_idx // self.heatmap_size]))
+
         else:
             resized_dcf_heatmap = None
 
@@ -624,9 +584,6 @@ class Tracker():
         post_heatmap = None
         best_score = 0
 
-        if dcf_flag == 'hard_negative' and self.hard_negative_recovery:
-            window_factor = 0
-
         # mask a false-positive based on DCF
         if dcf_heatmap is not None and self.init_dcf_score is not None:
             for i in range(self.max_false_postive):
@@ -643,12 +600,10 @@ class Tracker():
                 dcf_score = torch.max(unroll_resized_dcf_heatmap.view(self.heatmap_size, self.heatmap_size)[ty:by, lx:rx]).item()
 
                 if dcf_score / self.init_dcf_score < self.relative_valid_score_threshold * trtr_score / self.init_trtr_score  and dcf_score < self.absolute_valid_score_threshold * torch.max(unroll_resized_dcf_heatmap):
-                    #print('false-positive in ({}, {}), trtr score: {} / {}, dcf score: {} / {}, max dcf score: {}'.format(cx, cy, trtr_score, self.init_trtr_score,  dcf_score, self.init_dcf_score, torch.max(unroll_resized_dcf_heatmap)))
 
                     # mask the score around false positive center
                     heatmap.view(self.heatmap_size, self.heatmap_size)[ty:by, lx:rx] = 0
                 else:
-                    #print('target in ({}, {}), trtr score: {} / {}, dcf score: {} / {}'.format(cx, cy, trtr_score, self.init_trtr_score,  dcf_score, self.init_dcf_score))
 
                     # stop search false-positive
                     break
@@ -667,8 +622,6 @@ class Tracker():
 
             if window_factor == 0:
                 post_heatmap = penalty * heatmap
-
-        # print("trtr best score: ", best_score, "; dcf best score: ", torch.max(unroll_resized_dcf_heatmap))
 
         trtr_heatmap = post_heatmap
         if dcf_heatmap is not None:
@@ -713,7 +666,6 @@ class Tracker():
             else:
                 self.target_sz = self.init_target_sz
                 self.target_pos = torch.Tensor([img_shape[0]/2, img_shape[1]/2]) # center of image
-                #print("not recovery!!  max score of trtr heatmap: {} / {}, max score of dcf heatmap: {} / {}".format(max_trtr_score, self.init_trtr_score, max_dcf_score, self.init_dcf_score))
 
                 return {
                     'bbox': bbox,
@@ -757,8 +709,6 @@ class Tracker():
                 check_region = check_region.float() * self.heatmap_size / self.search_size
                 check_region = check_region.int()
                 trtr_score = torch.max(heatmap.view(self.heatmap_size, self.heatmap_size)[check_region[1]:check_region[3],check_region[0]:check_region[2]])
-
-                #print("boundary!!! max score of trtr heatmap: {} / {}, max score of dcf heatmap: {} / {}, count: {}, margin: {}, size: {}".format(trtr_score, self.init_trtr_score, dcf_score, self.init_dcf_score, self.invalid_bbox_cnt, margin, [width, height]))
 
                 #if trtr_score < 0.1:
                 if dcf_score < self.boundary_target_score_threshold * self.init_dcf_score and trtr_score < self.boundary_target_score_threshold * self.init_trtr_score:
@@ -847,13 +797,11 @@ class Tracker():
 
 
     def dcf_apply_filter(self, sample_x: TensorList):
-        #print("len of dcf_filter: ", len(self.dcf_filter))
         return operation.conv2d(sample_x, self.dcf_filter, mode='same')
 
     def dcf_localize_target(self, scores_raw):
         # TODO: learn the mechanism
         sf_weighted = fourier.cfft2(scores_raw) / (scores_raw.size(2) * scores_raw.size(3))
-        #print("scores_raw", type(scores_raw), len(scores_raw), scores_raw[0].shape)
 
         for i, sz in enumerate(self.dcf_feature_sz_list):
             sf_weighted[i] = fourier.shift_fs(sf_weighted[i], math.pi * (1 - torch.Tensor([self.dcf_kernel_size[0]%2, self.dcf_kernel_size[1]%2]) / sz))
@@ -863,20 +811,14 @@ class Tracker():
 
         scores *= self.dcf_output_window
 
-        #print("scores", type(scores), scores.shape)
-
         sz = scores.shape[-2:]
 
         # Shift scores back
         scores = torch.cat([scores[...,(sz[0]+1)//2:,:], scores[...,:(sz[0]+1)//2,:]], -2)
         scores = torch.cat([scores[...,:,(sz[1]+1)//2:], scores[...,:,:(sz[1]+1)//2]], -1)
 
-        # Get the average heatmap
-        # scores /= len(self.dcf_layers) // should be here, but, we have a special resize process in self.combine: crop_hwc (actually, this function is not good)
-
         # Find maximum
         max_score1, max_disp1 = dcf.max2d(scores)
-        #print(max_score1.shape, max_disp1.shape, max_score1, max_disp1)
 
         max_score1 = max_score1[0]
         max_disp1 = max_disp1[0,...].float().cpu().view(-1)
@@ -1012,8 +954,6 @@ class Tracker():
             for i in range(len(init_samples)):
                 init_samples[i] = torch.cat([init_samples[i], F.dropout2d(init_samples[i][0:1,...].expand(num,-1,-1,-1), p=prob, training=True)])
 
-        #print("layer1 init sample: ", init_samples[0].shape) # debug
-
         return TensorList(init_samples)
 
     def dcf_init_label_function(self, train_x, target_pos, target_sz, target_scale):
@@ -1041,14 +981,12 @@ class Tracker():
     def dcf_init_memory(self, train_x):
         # Initialize first-frame training samples
         self.dcf_num_init_samples = train_x.size(0)
-        #print("self.dcf_num_init_samples: ", self.dcf_num_init_samples)
         self.dcf_init_sample_weights = TensorList([x.new_ones(1) / x.shape[0] for x in train_x])
         self.dcf_init_training_samples = train_x
 
         # Sample counters and weights
         self.dcf_num_stored_samples = self.dcf_num_init_samples.copy()
         self.dcf_previous_replace_ind = [None] * len(self.dcf_num_stored_samples) #TODO: need for layers?
-        #print("self.dcf_previous_replace_ind: ", self.dcf_previous_replace_ind)
         self.dcf_sample_weights = TensorList([x.new_zeros(self.dcf_params.sample_memory_size) for x in train_x])
         for sw, init_sw, num in zip(self.dcf_sample_weights, self.dcf_init_sample_weights, self.dcf_num_init_samples):
             sw[:num] = init_sw
@@ -1188,8 +1126,6 @@ def get_args_parser():
     # Post Process
     parser.add_argument('--postprocess.boundary_recovery', type=bool, default=False,
                                     help='whether use boundary recovery')
-    parser.add_argument('--postprocess.hard_negative_recovery', type=bool, default=False,
-                                    help='(Depracated) whether use hard negative recovery')
     parser.add_argument('--postprocess.lost_target_recovery', type=bool, default=False,
                                     help='whether use lost target recovery')
 

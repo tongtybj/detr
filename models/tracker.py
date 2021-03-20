@@ -212,7 +212,7 @@ class Tracker(object):
 
         assert heatmap.size(0) == self.heatmap_size * self.heatmap_size
         raw_heatmap = heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format
-        # print("postprocess raw heatmap shape: {}".format(raw_heatmap.shape))
+
 
         if torch.max(heatmap) > self.score_threshold:
 
@@ -246,20 +246,14 @@ class Tracker(object):
                     break;
                 else:
                     window_factor = np.max(window_factor - self.window_factor / self.window_steps, 0)
-                    #print("reduce the window factor from {} to {}".format(window_factor + self.window_factor / self.window_steps, window_factor))
 
             post_heatmap = post_heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format
-
-            # print("postprocess best score: {}".format(best_score))
-            # print("postprocess post heatmap shape: {}".format(post_heatmap.shape))
 
             # bbox
             ct_int = torch.stack([best_idx % self.heatmap_size, best_idx // self.heatmap_size], dim = -1)
             bbox_reg = outputs['pred_bbox_reg'][0][best_idx].cpu()
             bbox_ct = (ct_int + bbox_reg) * torch.as_tensor(search.shape[-2:]) / float(self.heatmap_size)
             bbox_wh = bbox_wh_map[best_idx]
-            # print("postprocess best idx {}, ct_int: {}, reg: {}, ct: {}, and wh: {}".format(best_idx, ct_int, bbox_reg, bbox_ct, bbox_wh))
-
 
             ct_delta = (bbox_ct - self.search_size / 2) / scale_z
             cx = self.center_pos[0] + ct_delta[0].item()
@@ -295,7 +289,6 @@ class Tracker(object):
             heatmap_hsv = np.stack([heatmap_h.astype(np.uint8), heatmap_sv, heatmap_sv], -1)
             heatmap_color = cv2.cvtColor(heatmap_hsv, cv2.COLOR_HSV2BGR)
             rec_search_image = np.round(0.4 * heatmap_color + 0.6 * rec_search_image.copy()).astype(np.uint8)
-            # print("postprocess time: {}".format(time.time() - start_time))
 
             if self.init_best_score == 0:
                 self.init_best_score = best_score

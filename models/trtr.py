@@ -89,7 +89,6 @@ class TRTR(nn.Module):
 
             multi_frame = False
             if len(template_samples.tensors) > 1 and len(search_samples.tensors) == 1:
-                # print("do multiple frame mode for backbone")
                 multi_frame = True
 
             template_features, self.template_pos, _ = self.backbone(template_samples, multi_frame = multi_frame)
@@ -104,17 +103,12 @@ class TRTR(nn.Module):
                 self.template_src_projs.append(input_proj(template_feature.tensors))
 
             self.memory = []
-            # print("backbone template mask: {}".format(self.template_mask))
 
         start = time.time()
         search_features, search_pos, all_features  = self.backbone(search_samples)
-        # print("search image feature extraction: {}".format(time.time() - start))
         search_mask = None
         if self.transformer_mask:
             search_mask = search_features[-1].mask
-
-        #torch.set_printoptions(profile="full")
-        #print("backbone search mask: {}".format(search_mask))
 
         search_src_projs = []
         for input_proj, search_feature in zip(self.input_projs, search_features):
@@ -209,11 +203,6 @@ class SetCriterion(nn.Module):
         all_target_boxes_wh = torch.stack([t['wh'] for t in targets]) # [bn, 2]
         all_target_boxes_ind = torch.as_tensor([t['ind'].item() for t in targets], device = all_src_boxes_reg.device) # [bn]
 
-        # print("all_target_boxes_reg: {}, all_src_boxes_reg: {}".format(all_target_boxes_reg.shape, all_src_boxes_reg.shape))
-        # print("all_target_boxes_wh: {}, all_src_boxes_wh: {}".format(all_target_boxes_wh.shape, all_src_boxes_wh.shape))
-        # print("all_target_boxes_ind: {}".format(all_target_boxes_ind))
-
-
         # only calculate the loss for bbox has the object
         mask = [id for id, t in enumerate(targets) if t['valid'].item() == 1] # only extract the index with object
         src_boxes_reg = all_src_boxes_reg[mask]
@@ -221,11 +210,6 @@ class SetCriterion(nn.Module):
         src_boxes_wh = all_src_boxes_wh[mask]
         target_boxes_wh = all_target_boxes_wh[mask]
         target_boxes_ind = all_target_boxes_ind[mask]
-
-        # print("mask: {}".format(mask))
-        # print("target_boxes_reg: {}, src_boxes_reg: {}".format(target_boxes_reg.shape, src_boxes_reg.shape))
-        # print("target_boxes_wh: {}, src_boxes_wh: {}".format(target_boxes_wh.shape, src_boxes_wh.shape))
-        # print("target_boxes_ind: {}".format(target_boxes_ind))
 
         #loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
         loss_bbox_reg = reg_l1_loss(src_boxes_reg, target_boxes_ind, target_boxes_reg)
@@ -248,7 +232,6 @@ class SetCriterion(nn.Module):
         # Compute the average number of target boxes accross all nodes, for normalization purposes
         # TODO: this is a reserved function fro a negative sample training to improve the robustness like DasiamRPN
         num_boxes = sum(t['valid'].item() for t in targets)
-        # print("num of valid boxes: {}".format(num_boxes)) # debug
         num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)
