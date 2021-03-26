@@ -7,6 +7,7 @@ import cv2
 from jsonargparse import ArgumentParser, ActionParser
 import numpy as np
 import time
+import io
 
 import torch
 import torch.nn.functional as F
@@ -18,12 +19,16 @@ from util.box_ops import box_cxcywh_to_xyxy
 from util.misc import is_dist_avail_and_initialized, nested_tensor_from_tensor_list
 from models import build_model
 from .trtr import get_args_parser as trtr_args_parser
+import onnxruntime
 
 class Tracker(object):
-    def __init__(self, model, postprocess, search_size, postprocess_params):
+    def __init__(self, model, postprocess, search_size, postprocess_params, onnx_model = None):
 
         self.model = model
         self.model.eval()
+        self.onnx_model = onnx_model
+        self.use_onnx =  onnx_model is not None
+
         self.postprocess = postprocess
 
         self.search_size = search_size
@@ -88,15 +93,21 @@ class Tracker(object):
         cv2.rectangle(self.rect_template_image, (x1, y1), (x2, y2), (0,255,0), 3)
 
         # get mask
-        self.init_template_mask = [0, 0, template_image.shape[0], template_image.shape[1]]
+        template_bounds = np.array([0, 0, template_image.shape[0], template_image.shape[1]])
         if self.center_pos[0] < s_z/2:
-            self.init_template_mask[0] = (s_z/2 - self.center_pos[0]) * scale_z
+            template_bounds[0] = (s_z/2 - self.center_pos[0]) * scale_z
         if self.center_pos[1] < s_z/2:
-            self.init_template_mask[1] = (s_z/2 - self.center_pos[1]) * scale_z
+            template_bounds[1] = (s_z/2 - self.center_pos[1]) * scale_z
         if self.center_pos[0] + s_z/2 > img.shape[1]:
-            self.init_template_mask[2] = self.init_template_mask[2] - (self.center_pos[0] + s_z/2 - img.shape[1]) * scale_z
+            template_bounds[2] = template_bounds[2] - (self.center_pos[0] + s_z/2 - img.shape[1]) * scale_z
         if self.center_pos[1] + s_z/2 > img.shape[0]:
-            self.init_template_mask[3] = self.init_template_mask[3] - (self.center_pos[1] + s_z/2 - img.shape[0]) * scale_z
+            template_bounds[3] = template_bounds[3] - (self.center_pos[1] + s_z/2 - img.shape[0]) * scale_z
+
+        self.init_template_mask = np.ones((exemplar_size, exemplar_size), dtype=np.bool)
+        bbox = np.round(template_bounds).astype(np.int)
+        self.init_template_mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = False
+
+        self.init_template_mask = torch.as_tensor(self.init_template_mask).cuda()
 
 
         # normalize and conver to torch.tensor
@@ -130,16 +141,21 @@ class Tracker(object):
         s_z, scale_z = siamfc_like_scale(bbox_xyxy)
         s_x = self.search_size / scale_z
         # get mask
-        search_mask = [0, 0, self.search_size, self.search_size]
+        search_bounds = [0, 0, self.search_size, self.search_size]
 
         if self.center_pos[0] < s_x/2:
-            search_mask[0] = (s_x/2 - self.center_pos[0]) * scale_z
+            search_bounds[0] = (s_x/2 - self.center_pos[0]) * scale_z
         if self.center_pos[1] < s_x/2:
-            search_mask[1] = (s_x/2 - self.center_pos[1]) * scale_z
+            search_bounds[1] = (s_x/2 - self.center_pos[1]) * scale_z
         if self.center_pos[0] + s_x/2 > img.shape[1]:
-            search_mask[2] = search_mask[2] - (self.center_pos[0] + s_x/2 - img.shape[1]) * scale_z
+            search_bounds[2] = search_bounds[2] - (self.center_pos[0] + s_x/2 - img.shape[1]) * scale_z
         if self.center_pos[1] + s_x/2 > img.shape[0]:
-            search_mask[3] = search_mask[3] - (self.center_pos[1] + s_x/2 - img.shape[0]) * scale_z
+            search_bounds[3] = search_bounds[3] - (self.center_pos[1] + s_x/2 - img.shape[0]) * scale_z
+
+        search_mask = np.ones((self.search_size, self.search_size), dtype=np.bool)
+        bbox = np.round(search_bounds).astype(np.int)
+        search_mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = False
+        search_mask = torch.as_tensor(search_mask).cuda()
 
         channel_avg = [0, 0, 0]
         if self.center_pos[0] - s_x/2 < 1 or self.center_pos[1] - s_x/2 < 1 or self.center_pos[0] + s_x/2 > img.shape[1] - 1 or self.center_pos[1] + s_x/2 > img.shape[0] - 1:
@@ -149,66 +165,27 @@ class Tracker(object):
         # normalize and conver to torch.tensor
         search = self.image_normalize(np.round(search_image).astype(np.uint8)).cuda()
 
-        template_list = [self.init_template]
-        template_mask_list = [torch.as_tensor(self.init_template_mask).float()]
 
-        if self.multi_frame and self.prev_img_udpate:
-            channel_avg = np.mean(self.prev_img, axis=(0, 1))
-            prev_template_image, _ = crop_image(self.prev_img, bbox_xyxy, padding = channel_avg)
-            s_z, scale_z = siamfc_like_scale(bbox_xyxy)
+        if self.use_onnx:
+            def to_numpy(tensor):
+                if tensor.requires_grad:
+                    return tensor.detach().cpu().numpy()
+                else:
+                    return tensor.cpu().numpy()
+            inputs = {'search_image': to_numpy(search), 'search_mask': to_numpy(search_mask), 'template_image': to_numpy(self.init_template), 'template_mask': to_numpy(self.init_template_mask)}
+            outputs = self.onnx_model.run(None, inputs)
+        else:
+            with torch.no_grad():
+                if self.first_frame:
+                    outputs = self.model(search, search_mask, self.init_template, self.init_template_mask)
+                    self.first_frame = False
+                else:
+                    outputs = self.model(search, search_mask)
 
-            # get mask
-            self.prev_template_mask = [0, 0, prev_template_image.shape[0], prev_template_image.shape[1]]
-            if self.center_pos[0] < s_z/2:
-                self.prev_template_mask[0] = (s_z/2 - self.center_pos[0]) * scale_z
-            if self.center_pos[1] < s_z/2:
-                self.prev_template_mask[1] = (s_z/2 - self.center_pos[1]) * scale_z
-            if self.center_pos[0] + s_z/2 > img.shape[1]:
-                self.prev_template_mask[2] = self.prev_template_mask[2] - (self.center_pos[0] + s_z/2 - img.shape[1]) * scale_z
-            if self.center_pos[1] + s_z/2 > img.shape[0]:
-                self.prev_template_mask[3] = self.prev_template_mask[3] - (self.center_pos[1] + s_z/2 - img.shape[0]) * scale_z
-
-            # normalize and conver to torch.tensor
-            self.prev_template = self.image_normalize(np.round(prev_template_image).astype(np.uint8)).cuda()
-
-            # debug
-            # you can rewrite template_list and template_mask_list to only assing prev_template
-            # template_list = [prev_template]
-            # template_mask_list = [torch.as_tensor(self.prev_template_mask).float()]
-            # self.first_frame = True
-
-            # visualize debug
-            self.prev_rect_template_image = prev_template_image.copy()
-            init_bbox = np.array(self.size) * scale_z
-            exemplar_size = get_exemplar_size()
-            x1 = np.round(exemplar_size/2 - init_bbox[0]/2).astype(np.uint8)
-            y1 = np.round(exemplar_size/2 - init_bbox[1]/2).astype(np.uint8)
-            x2 = np.round(exemplar_size/2 + init_bbox[0]/2).astype(np.uint8)
-            y2 = np.round(exemplar_size/2 + init_bbox[1]/2).astype(np.uint8)
-            cv2.rectangle(self.prev_rect_template_image, (x1, y1), (x2, y2), (0,255,0), 3)
-
-            #template_list.append(self.prev_template)
-            #template_mask_list.append(torch.as_tensor(self.prev_template_mask).float())
-            template_list.insert(0, self.prev_template)
-            template_mask_list.insert(0, torch.as_tensor(self.prev_template_mask).float())
-
-        with torch.no_grad():
-            if self.first_frame:
-                outputs = self.model(nested_tensor_from_tensor_list([search], [torch.as_tensor(search_mask).float()]),
-                                     nested_tensor_from_tensor_list(template_list, template_mask_list))
-                self.first_frame = False
-            else:
-                if len(template_list) == 1:
-                    outputs = self.model(nested_tensor_from_tensor_list([search], [torch.as_tensor(search_mask).float()]))
-                else: # updated multi frame
-                    outputs = self.model(nested_tensor_from_tensor_list([search], [torch.as_tensor(search_mask).float()]),
-                                         nested_tensor_from_tensor_list(template_list, template_mask_list))
-
-
-        outputs = self.postprocess(outputs)
-
-        heatmap = outputs['pred_heatmap'][0].cpu() # we only address with a single image
-
+        if self.use_onnx:
+            heatmap = torch.as_tensor(outputs[0])[0]
+        else:
+            heatmap = outputs['pred_heatmap'][0].cpu() # we only address with a single image
 
         assert heatmap.size(0) == self.heatmap_size * self.heatmap_size
         raw_heatmap = heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format
@@ -216,12 +193,14 @@ class Tracker(object):
 
         if torch.max(heatmap) > self.score_threshold:
 
-
             def change(r):
                 return torch.max(r, 1. / r)
 
             # TODO: 255 is a fixed value because of the training process (template: 127, search: 255)
-            bbox_wh_map = outputs['pred_bbox_wh'][0].cpu() * 255 # convert from relative [0, 1] to absolute [0, height] coordinates
+            if self.use_onnx:
+                bbox_wh_map = torch.as_tensor(outputs[2])[0] * 255 # convert from relative [0, 1] to absolute [0, height] coordinates
+            else:
+                bbox_wh_map = outputs['pred_bbox_wh'][0].cpu() * 255 # convert from relative [0, 1] to absolute [0, height] coordinates
 
             # scale penalty
             pad = (bbox_wh_map[:, 0] + bbox_wh_map[:, 1]) * get_context_amount()
@@ -255,7 +234,10 @@ class Tracker(object):
 
             # bbox
             ct_int = torch.stack([best_idx % self.heatmap_size, best_idx // self.heatmap_size], dim = -1)
-            bbox_reg = outputs['pred_bbox_reg'][0][best_idx].cpu()
+            if self.use_onnx:
+                bbox_reg = torch.as_tensor(outputs[1])[0][best_idx]
+            else:
+                bbox_reg = outputs['pred_bbox_reg'][0][best_idx].cpu()
             bbox_ct = (ct_int + bbox_reg) * torch.as_tensor(search.shape[-2:]) / float(self.heatmap_size)
             bbox_wh = bbox_wh_map[best_idx]
             # print("postprocess best idx {}, ct_int: {}, reg: {}, ct: {}, and wh: {}".format(best_idx, ct_int, bbox_reg, bbox_ct, bbox_wh))
@@ -348,6 +330,12 @@ def get_args_parser():
                                     help="(Deprecated) use multi frame for encoder (template images)")
     parser.add_argument('--postprocess', action=ActionParser(parser=postprocess_parser))
 
+    parser.add_argument('--use_onnx', action='store_true',
+                                    help="whether use onxx for inference")
+    parser.add_argument('--create_onnx', action='store_true',
+                                    help="whether craete onxx file for inference")
+
+
     # TrTr
     parser.add_argument('--model', action=ActionParser(parser=trtr_args_parser()))
 
@@ -366,8 +354,34 @@ def build_tracker(args, model = None, postprocessors = None):
         assert 'model' in checkpoint
         model.load_state_dict(checkpoint['model'])
         model.to(device)
+        model.eval()
+
+    if args.create_onnx:
+        #onnx_io = io.BytesIO()
+        template_image = torch.rand(3, 127, 127).cuda()
+        search_image = torch.rand(3, 255, 255).cuda()
+        template_mask = torch.ones((127, 127), dtype=torch.bool).cuda()
+        search_mask = torch.ones((255, 255), dtype=torch.bool).cuda()
+
+        input_names = ['search_image', 'search_mask', 'template_image', 'template_mask']
+        output_names = ['pred_heatmap', 'pred_bbox_reg', 'pred_bbox_wh']
+
+        model_name = args.checkpoint.split('.pth')[0] + '.onnx'
+        torch.onnx.export(model, (search_image, search_mask, template_image, template_mask), model_name,
+                          verbose=True, export_params=True,
+                          input_names = input_names, output_names = output_names,
+                          do_constant_folding=True, opset_version=12)
+
+        args.use_onnx = True
+
+
+
+    onnx_model = None
+    if args.use_onnx:
+        onnx_model = onnxruntime.InferenceSession(args.checkpoint.split('.pth')[0] + '.onnx')
 
     return Tracker(model,
                    postprocessors["bbox"],
                    args.search_size,
-                   args.postprocess)
+                   args.postprocess,
+                   onnx_model)

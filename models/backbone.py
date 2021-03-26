@@ -97,27 +97,20 @@ class BackboneBase(nn.Module):
                 if backbone_name == "resnet50":
                     self.num_channels_list.append(2048)
 
-    def forward(self, tensor_list: NestedTensor):
-        xs = self.body(tensor_list.tensors)
-        out: Dict[str, NestedTensor] = {}
+    def forward(self, img: torch.Tensor, mask: torch.Tensor):
+        xs = self.body(img)
+        out_img: Dict[str, torch.Tensor] = {}
+        out_mask: Dict[str, torch.Tensor] = {}
         for name, x in xs.items():
 
             if 'layer' + name not in self.return_layers:
                 continue
 
-            #print(name, ", ", x.shape)
-            m = tensor_list.mask
-            assert m is not None
-            mask = F.interpolate(m[None].float(), size=x.shape[-2:]).to(torch.bool)[0]
+            m = F.interpolate(mask.unsqueeze(0).float(), size=x.shape[2:])[0].to(torch.bool)
 
-            # TODO: workaround to avoid NaN of attention calculation because of a full "True" mask
-            invalid_indices = (torch.logical_not(mask).sum(dim=[1,2]) == 0).nonzero().squeeze(-1)
-            if(len(invalid_indices)):
-                #print("workaround to avoid NaN for {}".format(invalid_indices))
-                mask[invalid_indices] = torch.zeros(x.shape[-2:], dtype=torch.bool, device=mask.device)
-
-            out[name] = NestedTensor(x, mask)
-        return out, xs
+            out_img[name] = x
+            out_mask[name] = m
+        return out_img, out_mask
 
 
 class Backbone(BackboneBase):
@@ -152,19 +145,17 @@ class Joiner(nn.Sequential):
         self.stride = backbone.stride
         self.dilation = backbone.dilation
 
-    def forward(self, tensor_list: NestedTensor, multi_frame = False):
+    def forward(self, img: torch.Tensor, mask: torch.Tensor):
 
-        xs, extra_out = self[0](tensor_list) # extract feature from search image (embedding)
-        out: List[NestedTensor] = []
+        xs_img, xs_mask = self[0](img, mask)
+        out: List[torch.Tensor] = []
         pos = []
-        for name, x in xs.items():
+        for name, x in xs_img.items():
             out.append(x)
             # position encoding
-            pos.append(self[1](x, multi_frame).to(x.tensors.dtype))
+            pos.append(self[1](x, xs_mask[name]).to(x.dtype))
 
-            # print("backbone {}: shape: {}".format(name, x.tensors.shape))
-
-        return out, pos, extra_out
+        return out, pos
 
 def build_backbone(args, position_embedding, train = False):
 

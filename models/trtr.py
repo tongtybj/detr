@@ -57,77 +57,43 @@ class TRTR(nn.Module):
 
         self.transformer_mask = transformer_mask
 
-    def forward(self, search_samples: NestedTensor, template_samples: NestedTensor = None):
-        """ template_samples is a NestedTensor for template image:
-               - samples.tensor: batched images, of shape [batch_size x 3 x H_template x W_template]
-               - samples.mask: a binary mask of shape [batch_size x H_template x W_template], containing 1 on padded pixels
-            search_samples is also a NestedTensor for searching image:
-               - samples.tensor: batched images, of shape [batch_size x 3 x H_search x W_search]
-               - samples.mask: a binary mask of shape [batch_size x H_search x W_search], containing 1 on padded pixels
+    def forward(self, search_image: torch.Tensor, search_mask: torch.Tensor, template_image: torch.Tensor = None, template_mask: torch.Tensor = None):
 
-            It returns a dict with the following elements:
-               - "pred_heatmap": The heatmap of the target bbox, of shape= [batch_size x (H_search x W_search) x 1]
-               - "pred_dense_reg": The regression of bbox for all query (i.e. all pixels), of shape= [batch_size x (H_search x W_search) x 2]
-                                   The regression reg O = [ p/stride - p_tilde], where p and p_tilde are the corrdinates
-                                   in input and output, respectively.
-               - "pred_dense_wh": The size of bbox for all query (i.e. all pixels), of shape= [batch_size x (H_search x W_search) x 2]
-                                  The height and width values are normalized in [0, 1],
-                                  relative to the size of each individual image (disregarding possible padding).
-                                  See PostProcess for information on how to retrieve the unnormalized bounding box.
-               - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
-                                dictionnaries containing the two above keys for each decoder layer.
-        """
-
-        if template_samples is not None:
-            assert isinstance(template_samples, NestedTensor)
-        assert isinstance(search_samples, NestedTensor)
-
+        # one batch size
+        search_image = search_image.unsqueeze(0)
+        search_mask = search_mask.unsqueeze(0)
 
         template_features = None
         template_pos = None
-        if template_samples is not None:
+        if template_image is not None:
 
-            multi_frame = False
-            if len(template_samples.tensors) > 1 and len(search_samples.tensors) == 1:
-                # print("do multiple frame mode for backbone")
-                multi_frame = True
+            # one batch size
+            template_image = template_image.unsqueeze(0)
+            template_mask = template_mask.unsqueeze(0)
 
-            template_features, self.template_pos, _ = self.backbone(template_samples, multi_frame = multi_frame)
-
-            self.template_mask = None
-            if self.transformer_mask:
-                self.template_mask = template_features[-1].mask
-
+            template_features, self.template_pos = self.backbone(template_image, template_mask)
 
             self.template_src_projs = []
             for input_proj, template_feature in zip(self.input_projs, template_features):
-                self.template_src_projs.append(input_proj(template_feature.tensors))
+                self.template_src_projs.append(input_proj(template_feature))
 
             self.memory = []
-            # print("backbone template mask: {}".format(self.template_mask))
 
         start = time.time()
-        search_features, search_pos, all_features  = self.backbone(search_samples)
-        # print("search image feature extraction: {}".format(time.time() - start))
-        search_mask = None
-        if self.transformer_mask:
-            search_mask = search_features[-1].mask
-
-        #torch.set_printoptions(profile="full")
-        #print("backbone search mask: {}".format(search_mask))
+        search_features, search_pos  = self.backbone(search_image, search_mask)
 
         search_src_projs = []
         for input_proj, search_feature in zip(self.input_projs, search_features):
-            search_src_projs.append(input_proj(search_feature.tensors))
+            search_src_projs.append(input_proj(search_feature))
 
 
         hs_list = []
         for i, (template_src_proj, search_src_proj, transformer) in enumerate(zip(self.template_src_projs, search_src_projs, self.transformer)):
-            if template_samples is not None:
-                hs, memory = transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1])
+            if template_image is not None:
+                hs, memory = transformer(template_src_proj, self.template_pos[-1], search_src_proj, search_pos[-1])
                 self.memory.append(memory)
             else:
-                hs = transformer(template_src_proj, self.template_mask, self.template_pos[-1], search_src_proj, search_mask, search_pos[-1], self.memory[i])[0]
+                hs = transformer(template_src_proj, self.template_pos[-1], search_src_proj, search_pos[-1], self.memory[i])[0]
 
             hs_list.append(hs)
 
@@ -137,18 +103,15 @@ class TRTR(nn.Module):
         hs_wh =  self.wh_embed(concat_hs)
         hs_hm = self.heatmap_embed(concat_hs)
 
-        outputs_heatmap = hs_hm  # we have different sigmoid process for training and inference, so we do not get sigmoid here.
 
         # TODO: whether can you sigmoid() for the offset regression,
         # YoLo V3 uses sigmoid: https://blog.paperspace.com/how-to-implement-a-yolo-object-detector-in-pytorch/
+        outputs_heatmap = hs_hm.sigmoid()
         outputs_bbox_reg = hs_reg.sigmoid()
         outputs_bbox_wh = hs_wh.sigmoid()
 
-        search_mask = search_features[-1].mask.flatten(1).unsqueeze(-1) # [bn, output_hegiht *  output_width, 1]
+        out = {'pred_heatmap': outputs_heatmap[-1].squeeze(-1), 'pred_bbox_reg': outputs_bbox_reg[-1], 'pred_bbox_wh': outputs_bbox_wh[-1]}
 
-        out = {'pred_heatmap': outputs_heatmap[-1], 'pred_bbox_reg': outputs_bbox_reg[-1], 'pred_bbox_wh': outputs_bbox_wh[-1], 'search_mask': search_mask, 'all_features': all_features}
-        if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_heatmap, outputs_bbox_reg, outputs_bbox_wh, search_mask)
         return out
 
     @torch.jit.unused
@@ -283,8 +246,6 @@ class PostProcess(nn.Module):
 
         # do post sigmoid process
         heatmap = outputs['pred_heatmap'].sigmoid().squeeze(-1)
-        # mask the heatmap
-        heatmap.masked_fill_(outputs['search_mask'].squeeze(-1), 0.0) # TODO check the validity
 
         out = {'pred_heatmap': heatmap, 'pred_bbox_reg': outputs['pred_bbox_reg'], 'pred_bbox_wh': outputs['pred_bbox_wh']}
 
