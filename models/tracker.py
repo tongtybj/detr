@@ -19,15 +19,22 @@ from util.box_ops import box_cxcywh_to_xyxy
 from util.misc import is_dist_avail_and_initialized, nested_tensor_from_tensor_list
 from models import build_model
 from .trtr import get_args_parser as trtr_args_parser
+
 import onnxruntime
+import onnx
+#import onnx_tensorrt.backend as backend
+from . import onnx_tensorrt_backend as backend
+
 
 class Tracker(object):
-    def __init__(self, model, postprocess, search_size, postprocess_params, onnx_model = None):
+    def __init__(self, model, postprocess, search_size, postprocess_params, onnx_model = None, trt_model = None):
 
         self.model = model
         self.model.eval()
         self.onnx_model = onnx_model
+        self.trt_model = trt_model
         self.use_onnx =  onnx_model is not None
+        self.use_trt =  trt_model is not None
 
         self.postprocess = postprocess
 
@@ -166,28 +173,34 @@ class Tracker(object):
         search = self.image_normalize(np.round(search_image).astype(np.uint8)).cuda()
 
 
+        def to_numpy(tensor):
+            if tensor.requires_grad:
+                return tensor.detach().cpu().numpy()
+            else:
+                return tensor.cpu().numpy()
+
         if self.use_onnx:
-            def to_numpy(tensor):
-                if tensor.requires_grad:
-                    return tensor.detach().cpu().numpy()
-                else:
-                    return tensor.cpu().numpy()
-            inputs = {'search_image': to_numpy(search), 'template_image': to_numpy(self.init_template)}
+            inputs = {'search_image': to_numpy(search.unsqueeze(0)), 'template_image': to_numpy(self.init_template.unsqueeze(0))}
             outputs = self.onnx_model.run(None, inputs)
+        elif self.use_trt:
+            start_t = time.time()
+            outputs = self.trt_model.run([to_numpy(search), to_numpy(self.init_template) ])
+            #outputs = self.trt_model.run([to_numpy(self.init_template)])
+            #print(outputs[0].shape, outputs[1].shape, outputs[2].shape)
         else:
             with torch.no_grad():
                 if self.first_frame:
-                    outputs = self.model(search, search_mask, self.init_template, self.init_template_mask)
+                    outputs = self.model(search.unsqueeze(0), search_mask.unsqueeze(0), self.init_template.unsqueeze(0), self.init_template_mask.unsqueeze(0))
                     self.first_frame = False
                 else:
-                    outputs = self.model(search, search_mask)
+                    outputs = self.model(search.unsqueeze(0), search_mask.unsqueeze(0))
 
-        if self.use_onnx:
-            heatmap = torch.as_tensor(outputs[0])[0]
+        if self.use_onnx or self.use_trt:
+            heatmap = torch.as_tensor(outputs[0])
         else:
-            heatmap = outputs['pred_heatmap'][0].cpu() # we only address with a single image
+            heatmap = outputs['pred_heatmap'].cpu() # we only address with a single image
 
-        heatmap = heatmap.squeeze(-1)
+        heatmap = heatmap.squeeze(0).squeeze(0).squeeze(-1)
 
         assert heatmap.size(0) == self.heatmap_size * self.heatmap_size
         raw_heatmap = heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format
@@ -199,10 +212,11 @@ class Tracker(object):
                 return torch.max(r, 1. / r)
 
             # TODO: 255 is a fixed value because of the training process (template: 127, search: 255)
-            if self.use_onnx:
-                bbox_wh_map = torch.as_tensor(outputs[2])[0] * 255 # convert from relative [0, 1] to absolute [0, height] coordinates
+            if self.use_onnx  or self.use_trt:
+                bbox_wh_map = torch.as_tensor(outputs[2])
             else:
-                bbox_wh_map = outputs['pred_bbox_wh'][0].cpu() * 255 # convert from relative [0, 1] to absolute [0, height] coordinates
+                bbox_wh_map = outputs['pred_bbox_wh'].cpu()
+            bbox_wh_map = bbox_wh_map.squeeze(0).squeeze(0) * 255  # convert from relative [0, 1] to absolute [0, height] coordinates
 
             # scale penalty
             pad = (bbox_wh_map[:, 0] + bbox_wh_map[:, 1]) * get_context_amount()
@@ -236,10 +250,12 @@ class Tracker(object):
 
             # bbox
             ct_int = torch.stack([best_idx % self.heatmap_size, best_idx // self.heatmap_size], dim = -1)
-            if self.use_onnx:
-                bbox_reg = torch.as_tensor(outputs[1])[0][best_idx]
+            if self.use_onnx  or self.use_trt:
+                bbox_reg_map = torch.as_tensor(outputs[1])
             else:
-                bbox_reg = outputs['pred_bbox_reg'][0][best_idx].cpu()
+                bbox_reg_map = outputs['pred_bbox_reg'].cpu()
+            bbox_reg = bbox_reg_map.squeeze(0).squeeze(0)[best_idx]
+
             bbox_ct = (ct_int + bbox_reg) * torch.as_tensor(search.shape[-2:]) / float(self.heatmap_size)
             bbox_wh = bbox_wh_map[best_idx]
             # print("postprocess best idx {}, ct_int: {}, reg: {}, ct: {}, and wh: {}".format(best_idx, ct_int, bbox_reg, bbox_ct, bbox_wh))
@@ -334,9 +350,16 @@ def get_args_parser():
 
     parser.add_argument('--use_onnx', action='store_true',
                                     help="whether use onxx for inference")
+    parser.add_argument('--optimize_onnx', action='store_true',
+                                    help="whether use optimize onxx model")
     parser.add_argument('--create_onnx', action='store_true',
                                     help="whether craete onxx file for inference")
 
+    parser.add_argument('--use_trt', action='store_true',
+                        help="whether use tensorrt for inference")
+
+    parser.add_argument('--use_fp16', action='store_true',
+                        help="whether use tensorrt fp16 for inference")
 
     # TrTr
     parser.add_argument('--model', action=ActionParser(parser=trtr_args_parser()))
@@ -358,32 +381,46 @@ def build_tracker(args, model = None, postprocessors = None):
         model.to(device)
         model.eval()
 
+    onnx_model_name = args.checkpoint.split('.pth')[0] + '.onnx'
     if args.create_onnx:
         #onnx_io = io.BytesIO()
-        template_image = torch.rand(3, 127, 127).cuda()
-        search_image = torch.rand(3, 255, 255).cuda()
-        template_mask = torch.ones((127, 127), dtype=torch.bool).cuda()
-        search_mask = torch.ones((255, 255), dtype=torch.bool).cuda()
+        template_image = torch.rand(1, 3, 127, 127).cuda()
+        search_image = torch.rand(1, 3, 255, 255).cuda()
+        template_mask = torch.ones((1, 127, 127), dtype=torch.bool).cuda()
+        search_mask = torch.ones((1, 255, 255), dtype=torch.bool).cuda()
 
         input_names = ['search_image', 'search_mask', 'template_image', 'template_mask']
         output_names = ['pred_heatmap', 'pred_bbox_reg', 'pred_bbox_wh']
-
-        model_name = args.checkpoint.split('.pth')[0] + '.onnx'
-        torch.onnx.export(model, (search_image, search_mask, template_image, template_mask), model_name,
+        #output_names = ['output']
+        torch.onnx.export(model, (search_image, search_mask, template_image, template_mask), onnx_model_name,
                           verbose=True, export_params=True,
                           input_names = input_names, output_names = output_names,
                           do_constant_folding=True, opset_version=12)
 
         args.use_onnx = True
 
-
-
     onnx_model = None
     if args.use_onnx:
-        onnx_model = onnxruntime.InferenceSession(args.checkpoint.split('.pth')[0] + '.onnx')
+        sess_options = onnxruntime.SessionOptions()
+        # Not faster than non-optimized onnx model in cuda
+        # try with CPU (python version), also can not confirm improvement in speed
+        if args.optimize_onnx: # deprecated
+            sess_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+            sess_options.optimized_model_filepath = args.checkpoint.split('.pth')[0] + '_opt.onnx'
+        onnx_model = onnxruntime.InferenceSession(args.checkpoint.split('.pth')[0] + '.onnx', sess_options)
+
+    trt_model = None
+    if args.use_trt:
+        onxx_model = onnx.load(onnx_model_name)
+        if args.use_fp16:
+            trt_engine_path = args.checkpoint.split('.pth')[0] + '_fp16.trt'
+        else:
+            trt_engine_path = args.checkpoint.split('.pth')[0] + '.trt'
+        trt_model = backend.prepare(onxx_model, trt_engine_path, device='CUDA:0')
 
     return Tracker(model,
                    postprocessors["bbox"],
                    args.search_size,
                    args.postprocess,
-                   onnx_model)
+                   onnx_model,
+                   trt_model)

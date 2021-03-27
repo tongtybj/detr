@@ -59,17 +59,9 @@ class TRTR(nn.Module):
 
     def forward(self, search_image: torch.Tensor, search_mask: torch.Tensor, template_image: torch.Tensor = None, template_mask: torch.Tensor = None):
 
-        # one batch size
-        search_image = search_image.unsqueeze(0)
-        search_mask = search_mask.unsqueeze(0)
-
         template_features = None
         template_pos = None
         if template_image is not None:
-
-            # one batch size
-            template_image = template_image.unsqueeze(0)
-            template_mask = template_mask.unsqueeze(0)
 
             template_features = self.backbone(template_image, template_mask)
 
@@ -86,8 +78,7 @@ class TRTR(nn.Module):
         for input_proj, search_feature in zip(self.input_projs, search_features):
             search_src_projs.append(input_proj(search_feature))
 
-
-        hs_list = []
+        # only use the final transformer output
         for i, (template_src_proj, search_src_proj, transformer) in enumerate(zip(self.template_src_projs, search_src_projs, self.transformer)):
             if template_image is not None:
                 hs, memory = transformer(template_src_proj, search_src_proj)
@@ -95,14 +86,9 @@ class TRTR(nn.Module):
             else:
                 hs = transformer(template_src_proj, search_src_proj, self.memory[i])[0]
 
-            hs_list.append(hs)
-
-        concat_hs = torch.cat(hs_list, -1)
-
-        hs_reg = self.reg_embed(concat_hs)
-        hs_wh =  self.wh_embed(concat_hs)
-        hs_hm = self.heatmap_embed(concat_hs)
-
+        hs_reg = self.reg_embed(hs)
+        hs_wh =  self.wh_embed(hs)
+        hs_hm = self.heatmap_embed(hs)
 
         # TODO: whether can you sigmoid() for the offset regression,
         # YoLo V3 uses sigmoid: https://blog.paperspace.com/how-to-implement-a-yolo-object-detector-in-pytorch/
@@ -110,8 +96,7 @@ class TRTR(nn.Module):
         outputs_bbox_reg = hs_reg.sigmoid()
         outputs_bbox_wh = hs_wh.sigmoid()
 
-        out = {'pred_heatmap': outputs_heatmap[-1], 'pred_bbox_reg': outputs_bbox_reg[-1], 'pred_bbox_wh': outputs_bbox_wh[-1]}
-
+        out = {'pred_heatmap': outputs_heatmap, 'pred_bbox_reg': outputs_bbox_reg, 'pred_bbox_wh': outputs_bbox_wh}
         return out
 
     @torch.jit.unused

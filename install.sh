@@ -61,14 +61,14 @@ conda install -y cython
 echo ""
 echo ""
 echo "****************** Installing onnx ******************"
-conda install -c conda-forge onnx
+conda install -y -c conda-forge onnx
 
 echo ""
 echo ""
 echo "****************** Installing onnx-runtime ******************"
 pip install onnxruntime-gpu
 
-# pip install onnxruntime-gpu==1.6.0 for cuda10.1 + cudnn8.0.1(please manually install)
+# pip install onnxruntime-gpu==1.6.0 for cuda10.2 + cudnn8.0.3(please manually install)
 
 echo ""
 echo ""
