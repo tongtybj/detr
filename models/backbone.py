@@ -152,10 +152,8 @@ class Joiner(nn.Sequential):
         pos = []
         for name, x in xs_img.items():
             out.append(x)
-            # position encoding
-            pos.append(self[1](x, xs_mask[name]).to(x.dtype))
 
-        return out, pos
+        return out
 
 def build_backbone(args, position_embedding, train = False):
 

@@ -172,7 +172,7 @@ class Tracker(object):
                     return tensor.detach().cpu().numpy()
                 else:
                     return tensor.cpu().numpy()
-            inputs = {'search_image': to_numpy(search), 'search_mask': to_numpy(search_mask), 'template_image': to_numpy(self.init_template), 'template_mask': to_numpy(self.init_template_mask)}
+            inputs = {'search_image': to_numpy(search), 'template_image': to_numpy(self.init_template)}
             outputs = self.onnx_model.run(None, inputs)
         else:
             with torch.no_grad():
@@ -186,6 +186,8 @@ class Tracker(object):
             heatmap = torch.as_tensor(outputs[0])[0]
         else:
             heatmap = outputs['pred_heatmap'][0].cpu() # we only address with a single image
+
+        heatmap = heatmap.squeeze(-1)
 
         assert heatmap.size(0) == self.heatmap_size * self.heatmap_size
         raw_heatmap = heatmap.view(self.heatmap_size, self.heatmap_size) # as a image format

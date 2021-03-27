@@ -71,7 +71,7 @@ class TRTR(nn.Module):
             template_image = template_image.unsqueeze(0)
             template_mask = template_mask.unsqueeze(0)
 
-            template_features, self.template_pos = self.backbone(template_image, template_mask)
+            template_features = self.backbone(template_image, template_mask)
 
             self.template_src_projs = []
             for input_proj, template_feature in zip(self.input_projs, template_features):
@@ -80,7 +80,7 @@ class TRTR(nn.Module):
             self.memory = []
 
         start = time.time()
-        search_features, search_pos  = self.backbone(search_image, search_mask)
+        search_features  = self.backbone(search_image, search_mask)
 
         search_src_projs = []
         for input_proj, search_feature in zip(self.input_projs, search_features):
@@ -90,10 +90,10 @@ class TRTR(nn.Module):
         hs_list = []
         for i, (template_src_proj, search_src_proj, transformer) in enumerate(zip(self.template_src_projs, search_src_projs, self.transformer)):
             if template_image is not None:
-                hs, memory = transformer(template_src_proj, self.template_pos[-1], search_src_proj, search_pos[-1])
+                hs, memory = transformer(template_src_proj, search_src_proj)
                 self.memory.append(memory)
             else:
-                hs = transformer(template_src_proj, self.template_pos[-1], search_src_proj, search_pos[-1], self.memory[i])[0]
+                hs = transformer(template_src_proj, search_src_proj, self.memory[i])[0]
 
             hs_list.append(hs)
 
@@ -110,7 +110,7 @@ class TRTR(nn.Module):
         outputs_bbox_reg = hs_reg.sigmoid()
         outputs_bbox_wh = hs_wh.sigmoid()
 
-        out = {'pred_heatmap': outputs_heatmap[-1].squeeze(-1), 'pred_bbox_reg': outputs_bbox_reg[-1], 'pred_bbox_wh': outputs_bbox_wh[-1]}
+        out = {'pred_heatmap': outputs_heatmap[-1], 'pred_bbox_reg': outputs_bbox_reg[-1], 'pred_bbox_wh': outputs_bbox_wh[-1]}
 
         return out
 
