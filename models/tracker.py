@@ -4,6 +4,7 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import cv2
+import copy
 from jsonargparse import ArgumentParser, ActionParser
 import numpy as np
 import time
@@ -18,7 +19,9 @@ from datasets.utils import crop_image, siamfc_like_scale, get_exemplar_size, get
 from util.box_ops import box_cxcywh_to_xyxy
 from util.misc import is_dist_avail_and_initialized, nested_tensor_from_tensor_list
 from models import build_model
+from .position_encoding import build_position_encoding
 from .trtr import get_args_parser as trtr_args_parser
+
 
 import onnxruntime
 import onnx
@@ -27,7 +30,7 @@ from . import onnx_tensorrt_backend as backend
 
 
 class Tracker(object):
-    def __init__(self, model, postprocess, search_size, postprocess_params, onnx_model = None, trt_model = None):
+    def __init__(self, model, template_position_embedding, search_position_embedding, postprocess, search_size, postprocess_params, onnx_model = None, trt_model = None):
 
         self.model = model
         self.model.eval()
@@ -37,6 +40,8 @@ class Tracker(object):
         self.use_trt =  trt_model is not None
 
         self.postprocess = postprocess
+        self.template_position_embedding = template_position_embedding
+        self.search_position_embedding = search_position_embedding
 
         self.search_size = search_size
         backbone_stride = model.backbone.stride
@@ -110,12 +115,7 @@ class Tracker(object):
         if self.center_pos[1] + s_z/2 > img.shape[0]:
             template_bounds[3] = template_bounds[3] - (self.center_pos[1] + s_z/2 - img.shape[0]) * scale_z
 
-        self.init_template_mask = np.ones((exemplar_size, exemplar_size), dtype=np.bool)
-        bbox = np.round(template_bounds).astype(np.int)
-        self.init_template_mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = False
-
-        self.init_template_mask = torch.as_tensor(self.init_template_mask).cuda()
-
+        self.template_pos_embedding = torch.as_tensor(self.template_position_embedding.create(template_bounds)).cuda()
 
         # normalize and conver to torch.tensor
         self.init_template = self.image_normalize(np.round(template_image).astype(np.uint8)).cuda()
@@ -159,10 +159,7 @@ class Tracker(object):
         if self.center_pos[1] + s_x/2 > img.shape[0]:
             search_bounds[3] = search_bounds[3] - (self.center_pos[1] + s_x/2 - img.shape[0]) * scale_z
 
-        search_mask = np.ones((self.search_size, self.search_size), dtype=np.bool)
-        bbox = np.round(search_bounds).astype(np.int)
-        search_mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = False
-        search_mask = torch.as_tensor(search_mask).cuda()
+        search_pos_embedding = torch.as_tensor(self.search_position_embedding.create(search_bounds)).cuda()
 
         channel_avg = [0, 0, 0]
         if self.center_pos[0] - s_x/2 < 1 or self.center_pos[1] - s_x/2 < 1 or self.center_pos[0] + s_x/2 > img.shape[1] - 1 or self.center_pos[1] + s_x/2 > img.shape[0] - 1:
@@ -172,7 +169,6 @@ class Tracker(object):
         # normalize and conver to torch.tensor
         search = self.image_normalize(np.round(search_image).astype(np.uint8)).cuda()
 
-
         def to_numpy(tensor):
             if tensor.requires_grad:
                 return tensor.detach().cpu().numpy()
@@ -180,20 +176,21 @@ class Tracker(object):
                 return tensor.cpu().numpy()
 
         if self.use_onnx:
-            inputs = {'search_image': to_numpy(search.unsqueeze(0)), 'template_image': to_numpy(self.init_template.unsqueeze(0))}
+            inputs = {'search_image': to_numpy(search.unsqueeze(0)), 'search_pos_embed': to_numpy(search_pos_embedding.unsqueeze(0)), 'template_image': to_numpy(self.init_template.unsqueeze(0)), 'template_pos_embed': to_numpy(self.template_pos_embedding.unsqueeze(0))}
             outputs = self.onnx_model.run(None, inputs)
         elif self.use_trt:
             start_t = time.time()
-            outputs = self.trt_model.run([to_numpy(search), to_numpy(self.init_template) ])
-            #outputs = self.trt_model.run([to_numpy(self.init_template)])
-            #print(outputs[0].shape, outputs[1].shape, outputs[2].shape)
+            search_pos_embedding = np.ascontiguousarray(to_numpy(search_pos_embedding), dtype=np.float32)
+            template_pos_embedding = np.ascontiguousarray(to_numpy(self.template_pos_embedding), dtype=np.float32)
+            outputs = self.trt_model.run([to_numpy(search), search_pos_embedding, to_numpy(self.init_template), template_pos_embedding])
+
         else:
             with torch.no_grad():
                 if self.first_frame:
-                    outputs = self.model(search.unsqueeze(0), search_mask.unsqueeze(0), self.init_template.unsqueeze(0), self.init_template_mask.unsqueeze(0))
+                    outputs = self.model(search.unsqueeze(0), search_pos_embedding.unsqueeze(0), self.init_template.unsqueeze(0), self.template_pos_embedding.unsqueeze(0))
                     self.first_frame = False
                 else:
-                    outputs = self.model(search.unsqueeze(0), search_mask.unsqueeze(0))
+                    outputs = self.model(search.unsqueeze(0), search_pos_embedding.unsqueeze(0))
 
         if self.use_onnx or self.use_trt:
             heatmap = torch.as_tensor(outputs[0])
@@ -366,33 +363,40 @@ def get_args_parser():
 
     return parser
 
-def build_tracker(args, model = None, postprocessors = None):
+def build_tracker(args):
     if not torch.cuda.is_available():
         raise ValueError("CUDA is not available in Pytorch")
 
     device = torch.device('cuda')
 
-    if model is None or postprocessors is None:
-        model, _, postprocessors = build_model(args.model)
 
-        checkpoint = torch.load(args.checkpoint, map_location='cpu')
-        assert 'model' in checkpoint
-        model.load_state_dict(checkpoint['model'])
-        model.to(device)
-        model.eval()
+    model, _, postprocessors = build_model(args.model)
+    checkpoint = torch.load(args.checkpoint, map_location='cpu')
+    assert 'model' in checkpoint
+    model.load_state_dict(checkpoint['model'])
+    model.to(device)
+    model.eval()
+
+    exemplar_size =  get_exemplar_size()
+    search_size = args.search_size
+    stride = model.backbone.stride
+    template_position_embedding = build_position_encoding(args.model, exemplar_size)
+    search_position_embedding = build_position_encoding(args.model, search_size)
 
     onnx_model_name = args.checkpoint.split('.pth')[0] + '.onnx'
     if args.create_onnx:
         #onnx_io = io.BytesIO()
-        template_image = torch.rand(1, 3, 127, 127).cuda()
-        search_image = torch.rand(1, 3, 255, 255).cuda()
-        template_mask = torch.ones((1, 127, 127), dtype=torch.bool).cuda()
-        search_mask = torch.ones((1, 255, 255), dtype=torch.bool).cuda()
+        template_image = torch.rand(1, 3, exemplar_size, exemplar_size).cuda()
+        search_image = torch.rand(1, 3, search_size, search_size).cuda()
+        template_feature_size = (exemplar_size + 1) // stride
+        template_pos_embed = torch.rand((1, args.model.transformer.hidden_dim, template_feature_size, template_feature_size)).cuda()
+        search_feature_size = (search_size + 1) // stride
+        search_pos_embed = torch.rand((1, args.model.transformer.hidden_dim, search_feature_size, search_feature_size)).cuda()
 
-        input_names = ['search_image', 'search_mask', 'template_image', 'template_mask']
+        input_names = ['search_image', 'search_pos_embed', 'template_image', 'template_pos_embed']
         output_names = ['pred_heatmap', 'pred_bbox_reg', 'pred_bbox_wh']
-        #output_names = ['output']
-        torch.onnx.export(model, (search_image, search_mask, template_image, template_mask), onnx_model_name,
+
+        torch.onnx.export(model, (search_image, search_pos_embed, template_image, template_pos_embed), onnx_model_name,
                           verbose=True, export_params=True,
                           input_names = input_names, output_names = output_names,
                           do_constant_folding=True, opset_version=12)
@@ -419,6 +423,8 @@ def build_tracker(args, model = None, postprocessors = None):
         trt_model = backend.prepare(onxx_model, trt_engine_path, device='CUDA:0')
 
     return Tracker(model,
+                   template_position_embedding,
+                   search_position_embedding,
                    postprocessors["bbox"],
                    args.search_size,
                    args.postprocess,

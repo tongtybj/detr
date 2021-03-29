@@ -97,20 +97,18 @@ class BackboneBase(nn.Module):
                 if backbone_name == "resnet50":
                     self.num_channels_list.append(2048)
 
-    def forward(self, img: torch.Tensor, mask: torch.Tensor):
+    def forward(self, img: torch.Tensor):
         xs = self.body(img)
         out_img: Dict[str, torch.Tensor] = {}
-        out_mask: Dict[str, torch.Tensor] = {}
+
         for name, x in xs.items():
 
             if 'layer' + name not in self.return_layers:
                 continue
 
-            m = F.interpolate(mask.unsqueeze(0).float(), size=x.shape[2:])[0].to(torch.bool)
-
             out_img[name] = x
-            out_mask[name] = m
-        return out_img, out_mask
+
+        return out_img
 
 
 class Backbone(BackboneBase):
@@ -138,16 +136,16 @@ class Backbone(BackboneBase):
 
 
 class Joiner(nn.Sequential):
-    def __init__(self, backbone, position_embedding):
-        super().__init__(backbone, position_embedding)
+    def __init__(self, backbone):
+        super().__init__(backbone)
 
         self.num_channels_list = []
         self.stride = backbone.stride
         self.dilation = backbone.dilation
 
-    def forward(self, img: torch.Tensor, mask: torch.Tensor):
+    def forward(self, img: torch.Tensor):
 
-        xs_img, xs_mask = self[0](img, mask)
+        xs_img = self[0](img)
         out: List[torch.Tensor] = []
         pos = []
         for name, x in xs_img.items():
@@ -155,13 +153,13 @@ class Joiner(nn.Sequential):
 
         return out
 
-def build_backbone(args, position_embedding, train = False):
+def build_backbone(args, train = False):
 
     if len(args.return_layers) == 0:
         if 'resnet' in args.model:
             args.return_layers = ['layer3']
 
     backbone = Backbone(args.model, train, args.return_layers, args.dilation)
-    model = Joiner(backbone, position_embedding)
+    model = Joiner(backbone)
     model.num_channels_list = backbone.num_channels_list
     return model

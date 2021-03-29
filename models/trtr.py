@@ -14,7 +14,6 @@ from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        reg_l1_loss, neg_loss,
                        get_world_size, is_dist_avail_and_initialized)
 
-from .position_encoding import build_position_encoding
 from .backbone import build_backbone
 from .backbone import get_args_parser as backbone_args_parser
 from .transformer import build_transformer
@@ -25,7 +24,7 @@ import numpy as np
 
 class TRTR(nn.Module):
     """ This is the TRTR module that performs target tracking """
-    def __init__(self, backbone, transformer, aux_loss=False, transformer_mask=False):
+    def __init__(self, backbone, transformer):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -48,22 +47,20 @@ class TRTR(nn.Module):
         self.input_projs = nn.ModuleList([nn.Conv2d(num_channels, hidden_dim, kernel_size=1) for num_channels in backbone.num_channels_list])
 
         self.backbone = backbone
-        self.aux_loss = aux_loss
 
         self.template_src_projs = []
         self.template_mask = None
         self.template_pos = None
         self.memory = []
 
-        self.transformer_mask = transformer_mask
 
-    def forward(self, search_image: torch.Tensor, search_mask: torch.Tensor, template_image: torch.Tensor = None, template_mask: torch.Tensor = None):
+    def forward(self, search_image: torch.Tensor, search_pos_embedding: torch.Tensor, template_image: torch.Tensor = None, template_pos_embedding: torch.Tensor = None):
 
         template_features = None
         template_pos = None
         if template_image is not None:
 
-            template_features = self.backbone(template_image, template_mask)
+            template_features = self.backbone(template_image)
 
             self.template_src_projs = []
             for input_proj, template_feature in zip(self.input_projs, template_features):
@@ -72,7 +69,7 @@ class TRTR(nn.Module):
             self.memory = []
 
         start = time.time()
-        search_features  = self.backbone(search_image, search_mask)
+        search_features  = self.backbone(search_image)
 
         search_src_projs = []
         for input_proj, search_feature in zip(self.input_projs, search_features):
@@ -81,10 +78,10 @@ class TRTR(nn.Module):
         # only use the final transformer output
         for i, (template_src_proj, search_src_proj, transformer) in enumerate(zip(self.template_src_projs, search_src_projs, self.transformer)):
             if template_image is not None:
-                hs, memory = transformer(template_src_proj, search_src_proj)
+                hs, memory = transformer(template_src_proj, template_pos_embedding, search_src_proj, search_pos_embedding)
                 self.memory.append(memory)
             else:
-                hs = transformer(template_src_proj, search_src_proj, self.memory[i])[0]
+                hs = transformer(template_src_proj, template_pos_embedding, search_src_proj, search_pos_embedding, self.memory[i])[0]
 
         hs_reg = self.reg_embed(hs)
         hs_wh =  self.wh_embed(hs)
@@ -275,9 +272,6 @@ def get_args_parser():
 
     # Backbone
     parser.add_argument('--backbone', action=ActionParser(parser=backbone_args_parser()))
-    # Position Embedding
-    parser.add_argument('--position_embedding', type=str, default='sine', choices=('sine', 'learned'),
-                        help="Type of positional embedding to use on top of the image features")
     # Transformer
     parser.add_argument('--transformer', action=ActionParser(parser=transformer_args_parser()))
 
@@ -287,23 +281,16 @@ def get_args_parser():
 def build(args):
     device = torch.device(args.device)
 
-    position_embedding = build_position_encoding(args)
-
     if hasattr(args, 'train_backbone'):
         train_backbone = args.train_backbone
     else:
         train_backbone = False
 
-    backbone = build_backbone(args.backbone, position_embedding, train = train_backbone)
+    backbone = build_backbone(args.backbone, train = train_backbone)
     transformer = build_transformer(args.transformer)
 
     print("start build model")
-    model = TRTR(
-        backbone,
-        transformer,
-        aux_loss=args.aux_loss,
-        transformer_mask = args.transformer_mask,
-    )
+    model = TRTR(backbone, transformer)
 
     weight_dict = {'loss_hm': 1, 'loss_bbox_reg': args.reg_loss_coef, 'loss_bbox_wh': args.wh_loss_coef}
 

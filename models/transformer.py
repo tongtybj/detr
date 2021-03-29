@@ -44,24 +44,28 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, template_src, search_src, memory = None):
+    def forward(self, template_src, template_pos_embed, search_src, search_pos_embed, memory = None):
         """
         template_src: [batch_size x hidden_dim x H_template x W_template]
 
         search_src: [batch_size x hidden_dim x H_search x W_search]
         """
 
-        # flatten and permute bNxCxHxW to HWxbNxC for encoder in transformer
-        template_src = template_src.flatten(2).permute(2, 0, 1)
-
         # encoding the template embedding with positional embbeding
         if memory is None:
-            memory = self.encoder(template_src)
+            # flatten and permute bNxCxHxW to HWxbNxC for encoder in transformer
+            template_src = template_src.flatten(2).permute(2, 0, 1)
+            template_pos_embed = template_pos_embed.flatten(2).permute(2, 0, 1)
+
+            memory = self.encoder(template_src, pos=template_pos_embed)
 
         # flatten and permute bNxCxHxW to HWxbNxC for decoder in transformer
         search_src = search_src.flatten(2).permute(2, 0, 1) # tgt
+        search_pos_embed = search_pos_embed.flatten(2).permute(2, 0, 1)
 
-        hs = self.decoder(search_src, memory)
+        hs = self.decoder(search_src, memory,
+                          encoder_pos=template_pos_embed,
+                          decoder_pos=search_pos_embed)
 
         return hs.transpose(1, 2), memory
 
