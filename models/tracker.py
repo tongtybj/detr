@@ -381,7 +381,9 @@ def build_tracker(args, model = None, postprocessors = None):
         model.to(device)
         model.eval()
 
-    onnx_model_name = args.checkpoint.split('.pth')[0] + '.onnx'
+    onnx_model_name = args.checkpoint.rsplit('/', 1)[0] + "/no_position_embedding/" +  args.checkpoint.rsplit('/', 1)[-1].split('.pth')[0] + '.onnx'
+    print(onnx_model_name)
+
     if args.create_onnx:
         #onnx_io = io.BytesIO()
         template_image = torch.rand(1, 3, 127, 127).cuda()
@@ -406,16 +408,16 @@ def build_tracker(args, model = None, postprocessors = None):
         # try with CPU (python version), also can not confirm improvement in speed
         if args.optimize_onnx: # deprecated
             sess_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
-            sess_options.optimized_model_filepath = args.checkpoint.split('.pth')[0] + '_opt.onnx'
-        onnx_model = onnxruntime.InferenceSession(args.checkpoint.split('.pth')[0] + '.onnx', sess_options)
+            sess_options.optimized_model_filepath = args.checkpoint.rsplit('/', 1)[0] + "/no_position_embedding/" +  args.checkpoint.rsplit('/', 1)[-1].split('.pth')[0] + '_opt.onnx'
+        onnx_model = onnxruntime.InferenceSession(args.checkpoint.rsplit('/', 1)[0] + "/no_position_embedding/" +  args.checkpoint.rsplit('/', 1)[-1].split('.pth')[0] + '.onnx', sess_options)
 
     trt_model = None
     if args.use_trt:
         onxx_model = onnx.load(onnx_model_name)
         if args.use_fp16:
-            trt_engine_path = args.checkpoint.split('.pth')[0] + '_fp16.trt'
+            trt_engine_path = args.checkpoint.rsplit('/', 1)[0] + "/no_position_embedding/" +  args.checkpoint.rsplit('/', 1)[-1].split('.pth')[0] + '_fp16.trt'
         else:
-            trt_engine_path = args.checkpoint.split('.pth')[0] + '.trt'
+            trt_engine_path = args.checkpoint.rsplit('/', 1)[0] + "/no_position_embedding/" +  args.checkpoint.rsplit('/', 1)[-1].split('.pth')[0] + '.trt'
         trt_model = backend.prepare(onxx_model, trt_engine_path, device='CUDA:0')
 
     return Tracker(model,
