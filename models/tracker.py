@@ -71,6 +71,8 @@ class Tracker(object):
         self.prev_template = None
         self.prev_template_mask = None
 
+        self.encoder_memory = None
+
     def _bbox_clip(self, bbox, boundary):
         x1 = max(0, bbox[0])
         y1 = max(0, bbox[1])
@@ -118,8 +120,7 @@ class Tracker(object):
         self.template_pos_embedding = torch.as_tensor(self.template_position_embedding.create(template_bounds)).cuda()
 
         # normalize and conver to torch.tensor
-        self.init_template = self.image_normalize(np.round(template_image).astype(np.uint8)).cuda()
-        self.first_frame = True
+        init_template = self.image_normalize(np.round(template_image).astype(np.uint8)).cuda()
 
         self.init_best_score = 0
 
@@ -128,6 +129,22 @@ class Tracker(object):
         debug_image = cv2.rectangle(template_image,
                                          (debug_bbox[0], debug_bbox[1]),
                                          (debug_bbox[2], debug_bbox[3]),(0,255,0),3)
+
+        def to_numpy(tensor):
+            if tensor.requires_grad:
+                return tensor.detach().cpu().numpy()
+            else:
+                return tensor.cpu().numpy()
+
+        if self.use_onnx:
+            inputs = {'template_image': to_numpy(init_template.unsqueeze(0)), 'template_pos_embed': to_numpy(self.template_pos_embedding.unsqueeze(0))}
+            self.encoder_memory = self.onnx_model[0].run(None, inputs)[0]
+        elif self.use_trt:
+            self.template_pos_embedding = np.ascontiguousarray(to_numpy(self.template_pos_embedding), dtype=np.float32)
+            self.encoder_memory = self.trt_model[0].run([to_numpy(init_template), self.template_pos_embedding])
+        else:
+            with torch.no_grad():
+                self.encoder_memory = self.model(template_image = init_template.unsqueeze(0), template_pos_embedding = self.template_pos_embedding.unsqueeze(0))
 
         return {'template_image': debug_image}
 
@@ -176,21 +193,16 @@ class Tracker(object):
                 return tensor.cpu().numpy()
 
         if self.use_onnx:
-            inputs = {'search_image': to_numpy(search.unsqueeze(0)), 'search_pos_embed': to_numpy(search_pos_embedding.unsqueeze(0)), 'template_image': to_numpy(self.init_template.unsqueeze(0)), 'template_pos_embed': to_numpy(self.template_pos_embedding.unsqueeze(0))}
-            outputs = self.onnx_model.run(None, inputs)
+            inputs = {'search_image': to_numpy(search.unsqueeze(0)), 'search_pos_embed': to_numpy(search_pos_embedding.unsqueeze(0)), 'template_pos_embed': to_numpy(self.template_pos_embedding.unsqueeze(0)), 'encoder_memory': self.encoder_memory}
+            outputs = self.onnx_model[1].run(None, inputs)
         elif self.use_trt:
             start_t = time.time()
             search_pos_embedding = np.ascontiguousarray(to_numpy(search_pos_embedding), dtype=np.float32)
-            template_pos_embedding = np.ascontiguousarray(to_numpy(self.template_pos_embedding), dtype=np.float32)
-            outputs = self.trt_model.run([to_numpy(search), search_pos_embedding, to_numpy(self.init_template), template_pos_embedding])
-
+            outputs = self.trt_model[1].run([to_numpy(search), search_pos_embedding, self.template_pos_embedding, self.encoder_memory])
+            #print(time.time()  - start_t)
         else:
             with torch.no_grad():
-                if self.first_frame:
-                    outputs = self.model(search.unsqueeze(0), search_pos_embedding.unsqueeze(0), self.init_template.unsqueeze(0), self.template_pos_embedding.unsqueeze(0))
-                    self.first_frame = False
-                else:
-                    outputs = self.model(search.unsqueeze(0), search_pos_embedding.unsqueeze(0))
+                outputs = self.model(search.unsqueeze(0), search_pos_embedding.unsqueeze(0), template_pos_embedding = self.template_pos_embedding.unsqueeze(0), encoder_memory = self.encoder_memory)
 
         if self.use_onnx or self.use_trt:
             heatmap = torch.as_tensor(outputs[0])
@@ -383,7 +395,7 @@ def build_tracker(args):
     template_position_embedding = build_position_encoding(args.model, exemplar_size)
     search_position_embedding = build_position_encoding(args.model, search_size)
 
-    onnx_model_name = args.checkpoint.split('.pth')[0] + '.onnx'
+
     if args.create_onnx:
         #onnx_io = io.BytesIO()
         template_image = torch.rand(1, 3, exemplar_size, exemplar_size).cuda()
@@ -392,11 +404,20 @@ def build_tracker(args):
         template_pos_embed = torch.rand((1, args.model.transformer.hidden_dim, template_feature_size, template_feature_size)).cuda()
         search_feature_size = (search_size + 1) // stride
         search_pos_embed = torch.rand((1, args.model.transformer.hidden_dim, search_feature_size, search_feature_size)).cuda()
+        encoder_memory = torch.rand((args.model.transformer.hidden_dim, 1, template_feature_size * template_feature_size)).cuda()
 
         input_names = ['search_image', 'search_pos_embed', 'template_image', 'template_pos_embed']
-        output_names = ['pred_heatmap', 'pred_bbox_reg', 'pred_bbox_wh']
-
+        output_names = ['encoder_memory']
+        onnx_model_name = args.checkpoint.split('.pth')[0] + '_encoder.onnx'
         torch.onnx.export(model, (search_image, search_pos_embed, template_image, template_pos_embed), onnx_model_name,
+                          verbose=True, export_params=True,
+                          input_names = input_names, output_names = output_names,
+                          do_constant_folding=True, opset_version=12)
+
+        input_names = ['search_image', 'search_pos_embed', 'template_image', 'template_pos_embed', 'encoder_memory']
+        output_names = ['pred_heatmap', 'pred_bbox_reg', 'pred_bbox_wh']
+        onnx_model_name = args.checkpoint.split('.pth')[0] + '_decoder.onnx'
+        torch.onnx.export(model, (search_image, search_pos_embed, template_image, template_pos_embed, encoder_memory), onnx_model_name,
                           verbose=True, export_params=True,
                           input_names = input_names, output_names = output_names,
                           do_constant_folding=True, opset_version=12)
@@ -405,22 +426,28 @@ def build_tracker(args):
 
     onnx_model = None
     if args.use_onnx:
-        sess_options = onnxruntime.SessionOptions()
-        # Not faster than non-optimized onnx model in cuda
-        # try with CPU (python version), also can not confirm improvement in speed
-        if args.optimize_onnx: # deprecated
-            sess_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
-            sess_options.optimized_model_filepath = args.checkpoint.split('.pth')[0] + '_opt.onnx'
-        onnx_model = onnxruntime.InferenceSession(args.checkpoint.split('.pth')[0] + '.onnx', sess_options)
+        onnx_model = [] # encoder + decoder
+        onnx_model_name = args.checkpoint.split('.pth')[0] + '_encoder.onnx'
+        onnx_model.append(onnxruntime.InferenceSession(onnx_model_name))
+        onnx_model_name = args.checkpoint.split('.pth')[0] + '_decoder.onnx'
+        onnx_model.append(onnxruntime.InferenceSession(onnx_model_name))
 
     trt_model = None
     if args.use_trt:
-        onxx_model = onnx.load(onnx_model_name)
+        trt_model = [] # encoder + decoder
         if args.use_fp16:
-            trt_engine_path = args.checkpoint.split('.pth')[0] + '_fp16.trt'
+            trt_engine_path = args.checkpoint.split('.pth')[0] + '_encoder_fp16.trt'
         else:
-            trt_engine_path = args.checkpoint.split('.pth')[0] + '.trt'
-        trt_model = backend.prepare(onxx_model, trt_engine_path, device='CUDA:0')
+            trt_engine_path = args.checkpoint.split('.pth')[0] + '_encoder.trt'
+        onxx_model = onnx.load(args.checkpoint.split('.pth')[0] + '_encoder.onnx')
+        trt_model.append(backend.prepare(onxx_model, trt_engine_path, device='CUDA:0'))
+
+        if args.use_fp16:
+            trt_engine_path = args.checkpoint.split('.pth')[0] + '_decoder_fp16.trt'
+        else:
+            trt_engine_path = args.checkpoint.split('.pth')[0] + '_decoder.trt'
+        onxx_model = onnx.load(args.checkpoint.split('.pth')[0] + '_decoder.onnx')
+        trt_model.append(backend.prepare(onxx_model, trt_engine_path, device='CUDA:0'))
 
     return Tracker(model,
                    template_position_embedding,

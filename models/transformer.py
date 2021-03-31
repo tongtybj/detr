@@ -52,12 +52,15 @@ class Transformer(nn.Module):
         """
 
         # encoding the template embedding with positional embbeding
+        template_pos_embed = template_pos_embed.flatten(2).permute(2, 0, 1)
         if memory is None:
             # flatten and permute bNxCxHxW to HWxbNxC for encoder in transformer
             template_src = template_src.flatten(2).permute(2, 0, 1)
-            template_pos_embed = template_pos_embed.flatten(2).permute(2, 0, 1)
 
             memory = self.encoder(template_src, pos=template_pos_embed)
+
+            if search_src is None:
+                return None, memory
 
         # flatten and permute bNxCxHxW to HWxbNxC for decoder in transformer
         search_src = search_src.flatten(2).permute(2, 0, 1) # tgt

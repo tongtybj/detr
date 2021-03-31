@@ -258,7 +258,12 @@ class TensorRTBackendRep(BackendRep):
         #print(len(outputs), outputs[0].reshape([32,32]))
 
         # hard-coding
-        return outputs[0].reshape([1, 1, 1024, 1]), outputs[1].reshape([1, 1, 1024, 2]), outputs[2].reshape([1, 1, 1024, 2])
+        if len(outputs) == 1:
+            return outputs[0].reshape([256, 1, 256])
+        if len(outputs) == 3:
+            return outputs[0].reshape([1, 1, 1024, 1]), outputs[1].reshape([1, 1, 1024, 2]), outputs[2].reshape([1, 1, 1024, 2])
+
+        raise ValueError("should not be here!!")
 
 class TensorRTBackend(Backend):
     @classmethod

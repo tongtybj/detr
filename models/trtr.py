@@ -51,37 +51,37 @@ class TRTR(nn.Module):
         self.template_src_projs = []
         self.template_mask = None
         self.template_pos = None
-        self.memory = []
 
 
-    def forward(self, search_image: torch.Tensor, search_pos_embedding: torch.Tensor, template_image: torch.Tensor = None, template_pos_embedding: torch.Tensor = None):
+    def forward(self, search_image: torch.Tensor = None, search_pos_embedding: torch.Tensor = None, template_image: torch.Tensor = None, template_pos_embedding: torch.Tensor = None, encoder_memory = None):
 
-        template_features = None
-        template_pos = None
-        if template_image is not None:
-
+        if encoder_memory is None:
             template_features = self.backbone(template_image)
 
             self.template_src_projs = []
             for input_proj, template_feature in zip(self.input_projs, template_features):
                 self.template_src_projs.append(input_proj(template_feature))
 
-            self.memory = []
-
         start = time.time()
-        search_features  = self.backbone(search_image)
 
-        search_src_projs = []
-        for input_proj, search_feature in zip(self.input_projs, search_features):
-            search_src_projs.append(input_proj(search_feature))
+        search_src_projs = [None] * len(self.transformer)
+
+        if encoder_memory is not None:
+            search_src_projs = []
+            search_features  = self.backbone(search_image)
+
+            for input_proj, search_feature in zip(self.input_projs, search_features):
+                search_src_projs.append(input_proj(search_feature))
 
         # only use the final transformer output
         for i, (template_src_proj, search_src_proj, transformer) in enumerate(zip(self.template_src_projs, search_src_projs, self.transformer)):
-            if template_image is not None:
+            if encoder_memory is None:
                 hs, memory = transformer(template_src_proj, template_pos_embedding, search_src_proj, search_pos_embedding)
-                self.memory.append(memory)
             else:
-                hs = transformer(template_src_proj, template_pos_embedding, search_src_proj, search_pos_embedding, self.memory[i])[0]
+                hs = transformer(template_src_proj, template_pos_embedding, search_src_proj, search_pos_embedding, encoder_memory)[0]
+
+        if encoder_memory is None:
+            return memory
 
         hs_reg = self.reg_embed(hs)
         hs_wh =  self.wh_embed(hs)
