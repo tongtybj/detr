@@ -57,10 +57,6 @@ class Tracker(object):
 
         self.init_bbox_size = []
 
-        self.image_normalize = T.Compose([
-            T.ToTensor(), # Converts a numpy.ndarray (H x W x C) in the range [0, 255] to a torch.FloatTensor of shape (C x H x W) in the range [0.0, 1.0]
-            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ])
         self.first_frame = False
 
         self.multi_frame = postprocess_params.multi_frame
@@ -72,6 +68,19 @@ class Tracker(object):
         self.prev_template_mask = None
 
         self.encoder_memory = None
+
+    def image_normalize(self, image):
+        # self.torch_image_normalize = T.Compose([
+        #     T.ToTensor(), # Converts a numpy.ndarray (H x W x C) in the range [0, 255] to a torch.FloatTensor of shape (C x H x W) in the range [0.0, 1.0]
+        #     T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        # ])
+        image = image / 255
+        image -= (0.485, 0.456, 0.406)
+        image /= (0.229, 0.224, 0.225)
+
+        #return image.astype(np.float32).transpose(2,0,1)
+        return image.astype(np.float32)
+
 
     def _bbox_clip(self, bbox, boundary):
         x1 = max(0, bbox[0])
@@ -117,10 +126,10 @@ class Tracker(object):
         if self.center_pos[1] + s_z/2 > img.shape[0]:
             template_bounds[3] = template_bounds[3] - (self.center_pos[1] + s_z/2 - img.shape[0]) * scale_z
 
-        self.template_pos_embedding = torch.as_tensor(self.template_position_embedding.create(template_bounds)).cuda()
+        self.template_pos_embedding = self.template_position_embedding.create(template_bounds)
 
         # normalize and conver to torch.tensor
-        init_template = self.image_normalize(np.round(template_image).astype(np.uint8)).cuda()
+        init_template = self.image_normalize(np.round(template_image).astype(np.uint8))
 
         self.init_best_score = 0
 
@@ -130,21 +139,15 @@ class Tracker(object):
                                          (debug_bbox[0], debug_bbox[1]),
                                          (debug_bbox[2], debug_bbox[3]),(0,255,0),3)
 
-        def to_numpy(tensor):
-            if tensor.requires_grad:
-                return tensor.detach().cpu().numpy()
-            else:
-                return tensor.cpu().numpy()
-
         if self.use_onnx:
-            inputs = {'template_image': to_numpy(init_template.unsqueeze(0)), 'template_pos_embed': to_numpy(self.template_pos_embedding.unsqueeze(0))}
+            inputs = {'template_image': init_template[None,:,:,:], 'template_pos_embed': self.template_pos_embedding[None,:,:,:]}
             self.encoder_memory = self.onnx_model[0].run(None, inputs)[0]
         elif self.use_trt:
-            self.template_pos_embedding = np.ascontiguousarray(to_numpy(self.template_pos_embedding), dtype=np.float32)
-            self.encoder_memory = self.trt_model[0].run([to_numpy(init_template), self.template_pos_embedding])
+            self.template_pos_embedding = np.ascontiguousarray(self.template_pos_embedding)
+            self.encoder_memory = self.trt_model[0].run([np.ascontiguousarray(init_template), self.template_pos_embedding])
         else:
             with torch.no_grad():
-                self.encoder_memory = self.model(template_image = init_template.unsqueeze(0), template_pos_embedding = self.template_pos_embedding.unsqueeze(0))
+                self.encoder_memory = self.model(template_image = torch.as_tensor(init_template).unsqueeze(0).cuda(), template_pos_embedding = torch.as_tensor(self.template_pos_embedding).unsqueeze(0).cuda())
 
         return {'template_image': debug_image}
 
@@ -176,7 +179,7 @@ class Tracker(object):
         if self.center_pos[1] + s_x/2 > img.shape[0]:
             search_bounds[3] = search_bounds[3] - (self.center_pos[1] + s_x/2 - img.shape[0]) * scale_z
 
-        search_pos_embedding = torch.as_tensor(self.search_position_embedding.create(search_bounds)).cuda()
+        search_pos_embedding = self.search_position_embedding.create(search_bounds)
 
         channel_avg = [0, 0, 0]
         if self.center_pos[0] - s_x/2 < 1 or self.center_pos[1] - s_x/2 < 1 or self.center_pos[0] + s_x/2 > img.shape[1] - 1 or self.center_pos[1] + s_x/2 > img.shape[0] - 1:
@@ -184,25 +187,18 @@ class Tracker(object):
         _, search_image = crop_image(img, bbox_xyxy, padding = channel_avg, instance_size = self.search_size)
 
         # normalize and conver to torch.tensor
-        search = self.image_normalize(np.round(search_image).astype(np.uint8)).cuda()
-
-        def to_numpy(tensor):
-            if tensor.requires_grad:
-                return tensor.detach().cpu().numpy()
-            else:
-                return tensor.cpu().numpy()
+        search = self.image_normalize(np.round(search_image).astype(np.uint8))
 
         if self.use_onnx:
-            inputs = {'search_image': to_numpy(search.unsqueeze(0)), 'search_pos_embed': to_numpy(search_pos_embedding.unsqueeze(0)), 'template_pos_embed': to_numpy(self.template_pos_embedding.unsqueeze(0)), 'encoder_memory': self.encoder_memory}
+            inputs = {'search_image': search[None,:,:,:], 'search_pos_embed': search_pos_embedding[None,:,:,:], 'template_pos_embed': self.template_pos_embedding[None,:,:,:], 'encoder_memory': self.encoder_memory}
             outputs = self.onnx_model[1].run(None, inputs)
         elif self.use_trt:
             start_t = time.time()
-            search_pos_embedding = np.ascontiguousarray(to_numpy(search_pos_embedding), dtype=np.float32)
-            outputs = self.trt_model[1].run([to_numpy(search), search_pos_embedding, self.template_pos_embedding, self.encoder_memory])
+            outputs = self.trt_model[1].run([np.ascontiguousarray(search), np.ascontiguousarray(search_pos_embedding), self.template_pos_embedding, self.encoder_memory])
             #print(time.time()  - start_t)
         else:
             with torch.no_grad():
-                outputs = self.model(search.unsqueeze(0), search_pos_embedding.unsqueeze(0), template_pos_embedding = self.template_pos_embedding.unsqueeze(0), encoder_memory = self.encoder_memory)
+                outputs = self.model(torch.as_tensor(search).unsqueeze(0).cuda(), torch.as_tensor(search_pos_embedding).unsqueeze(0).cuda(), template_pos_embedding = torch.as_tensor(self.template_pos_embedding).unsqueeze(0).cuda(), encoder_memory = self.encoder_memory)
 
         if self.use_onnx or self.use_trt:
             heatmap = torch.as_tensor(outputs[0])
@@ -265,7 +261,7 @@ class Tracker(object):
                 bbox_reg_map = outputs['pred_bbox_reg'].cpu()
             bbox_reg = bbox_reg_map.squeeze(0).squeeze(0)[best_idx]
 
-            bbox_ct = (ct_int + bbox_reg) * torch.as_tensor(search.shape[-2:]) / float(self.heatmap_size)
+            bbox_ct = (ct_int + bbox_reg) * torch.as_tensor([self.search_size, self.search_size]) / float(self.heatmap_size)
             bbox_wh = bbox_wh_map[best_idx]
             # print("postprocess best idx {}, ct_int: {}, reg: {}, ct: {}, and wh: {}".format(best_idx, ct_int, bbox_reg, bbox_ct, bbox_wh))
 
@@ -398,12 +394,12 @@ def build_tracker(args):
 
     if args.create_onnx:
         #onnx_io = io.BytesIO()
-        template_image = torch.rand(1, 3, exemplar_size, exemplar_size).cuda()
-        search_image = torch.rand(1, 3, search_size, search_size).cuda()
+        template_image = torch.rand(1, exemplar_size, exemplar_size, 3).cuda()
+        search_image = torch.rand(1, search_size, search_size, 3).cuda()
         template_feature_size = (exemplar_size + 1) // stride
-        template_pos_embed = torch.rand((1, args.model.transformer.hidden_dim, template_feature_size, template_feature_size)).cuda()
+        template_pos_embed = torch.rand((1, template_feature_size, template_feature_size, args.model.transformer.hidden_dim)).cuda()
         search_feature_size = (search_size + 1) // stride
-        search_pos_embed = torch.rand((1, args.model.transformer.hidden_dim, search_feature_size, search_feature_size)).cuda()
+        search_pos_embed = torch.rand((1, search_feature_size, search_feature_size, args.model.transformer.hidden_dim)).cuda()
         encoder_memory = torch.rand((args.model.transformer.hidden_dim, 1, template_feature_size * template_feature_size)).cuda()
 
         input_names = ['search_image', 'search_pos_embed', 'template_image', 'template_pos_embed']
@@ -439,15 +435,13 @@ def build_tracker(args):
             trt_engine_path = args.checkpoint.split('.pth')[0] + '_encoder_fp16.trt'
         else:
             trt_engine_path = args.checkpoint.split('.pth')[0] + '_encoder.trt'
-        onxx_model = onnx.load(args.checkpoint.split('.pth')[0] + '_encoder.onnx')
-        trt_model.append(backend.prepare(onxx_model, trt_engine_path, device='CUDA:0'))
+        trt_model.append(backend.prepare(trt_engine_path, device='CUDA:0'))
 
         if args.use_fp16:
             trt_engine_path = args.checkpoint.split('.pth')[0] + '_decoder_fp16.trt'
         else:
             trt_engine_path = args.checkpoint.split('.pth')[0] + '_decoder.trt'
-        onxx_model = onnx.load(args.checkpoint.split('.pth')[0] + '_decoder.onnx')
-        trt_model.append(backend.prepare(onxx_model, trt_engine_path, device='CUDA:0'))
+        trt_model.append(backend.prepare(trt_engine_path, device='CUDA:0'))
 
     return Tracker(model,
                    template_position_embedding,

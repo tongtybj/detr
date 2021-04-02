@@ -63,7 +63,7 @@ class PositionEmbeddingSine():
         pos_x = np.stack((np.sin(pos_x[:, :, 0::2]), np.cos(pos_x[:, :, 1::2])), 3).reshape(mask.shape[0], mask.shape[1], -1)
         pos_y = np.stack((np.sin(pos_y[:, :, 0::2]), np.cos(pos_y[:, :, 1::2])), 3).reshape(mask.shape[0], mask.shape[1], -1)
 
-        pos = np.concatenate((pos_y, pos_x), 2).transpose(2, 0, 1)
+        pos = np.concatenate((pos_y, pos_x), 2)
         return pos
 
 def build_position_encoding(args, image_size):

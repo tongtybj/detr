@@ -56,22 +56,27 @@ class TRTR(nn.Module):
     def forward(self, search_image: torch.Tensor = None, search_pos_embedding: torch.Tensor = None, template_image: torch.Tensor = None, template_pos_embedding: torch.Tensor = None, encoder_memory = None):
 
         if encoder_memory is None:
-            template_features = self.backbone(template_image)
+            template_features = self.backbone(template_image.permute(0,3,1,2))
 
             self.template_src_projs = []
             for input_proj, template_feature in zip(self.input_projs, template_features):
                 self.template_src_projs.append(input_proj(template_feature))
 
-        start = time.time()
+        if template_pos_embedding is not None:
+            template_pos_embedding = template_pos_embedding.permute(0,3,1,2)
 
         search_src_projs = [None] * len(self.transformer)
 
         if encoder_memory is not None:
             search_src_projs = []
-            search_features  = self.backbone(search_image)
+            search_features  = self.backbone(search_image.permute(0,3,1,2))
 
             for input_proj, search_feature in zip(self.input_projs, search_features):
                 search_src_projs.append(input_proj(search_feature))
+
+        if search_pos_embedding is not None:
+            search_pos_embedding = search_pos_embedding.permute(0,3,1,2)
+
 
         # only use the final transformer output
         for i, (template_src_proj, search_src_proj, transformer) in enumerate(zip(self.template_src_projs, search_src_projs, self.transformer)):
