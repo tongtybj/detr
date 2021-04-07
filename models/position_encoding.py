@@ -24,6 +24,9 @@ class PositionEmbeddingSine():
         self.image_size = image_size
         self.feature_size = (image_size + 1) // stride
 
+        self.dim_t = np.arange(self.num_pos_feats, dtype=np.float32)
+        self.dim_t = self.temperature ** (2 * (self.dim_t // 2) / self.num_pos_feats)
+
         mask = np.ones((self.feature_size, self.feature_size))
         self.default_position_embedding = self._algorithm(mask)
 
@@ -53,11 +56,8 @@ class PositionEmbeddingSine():
             y_embed = y_embed / (y_embed[-1:, :] + eps) * self.scale
             x_embed = x_embed / (x_embed[:, -1:] + eps) * self.scale
 
-        dim_t = np.arange(self.num_pos_feats, dtype=np.float32)
-        dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_pos_feats)
-
-        pos_x = x_embed[:, :, None] / dim_t
-        pos_y = y_embed[:, :, None] / dim_t
+        pos_x = x_embed[:, :, None] / self.dim_t
+        pos_y = y_embed[:, :, None] / self.dim_t
 
         #print(np.stack((np.sin(pos_x[:, :, 0::2]), np.cos(pos_x[:, :, 1::2])), 3).shape)
         pos_x = np.stack((np.sin(pos_x[:, :, 0::2]), np.cos(pos_x[:, :, 1::2])), 3).reshape(mask.shape[0], mask.shape[1], -1)
